@@ -12,10 +12,7 @@ function pythonApiPlugin(): Plugin {
     name: "python-api-server",
     configureServer() {
       const python = process.platform === "win32" ? "python" : "python3";
-      proc = spawn(python, ["api_server.py"], {
-        cwd: root,
-        stdio: "inherit",
-      });
+      proc = spawn(python, ["api_server.py"], { cwd: root, stdio: "inherit" });
       console.log("[vite] Started api_server.py on port 8001");
     },
     closeBundle() {
@@ -24,8 +21,8 @@ function pythonApiPlugin(): Plugin {
   };
 }
 
-export default defineConfig({
-  plugins: [react(), tailwindcss(), pythonApiPlugin()],
+export default defineConfig(({ command }) => ({
+  plugins: [react(), tailwindcss(), ...(command === "serve" ? [pythonApiPlugin()] : [])],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
@@ -40,4 +37,9 @@ export default defineConfig({
       },
     },
   },
-});
+  build: {
+    rollupOptions: {
+      input: path.resolve(__dirname, "index.html"),
+    },
+  },
+}));

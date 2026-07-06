@@ -1,19 +1,14 @@
-import { StrictMode, useCallback, useEffect, useState } from "react";
-import { createRoot } from "react-dom/client";
+import { useCallback, useEffect, useState } from "react";
 import { HardDrive, Shield, Zap } from "lucide-react";
-import { Toaster } from "sonner";
 import { api, type ReceivedFile, type SystemStatus, type TransferJob } from "@/lib/api";
-import { isHostedDeployment } from "@/lib/config";
-import { ApiConnection } from "@/components/ApiConnection";
 import { FileUpload } from "@/components/FileUpload";
 import { ReceivedFiles } from "@/components/ReceivedFiles";
 import { ServerPanel } from "@/components/ServerPanel";
 import { TransferHistory } from "@/components/TransferHistory";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import "./index.css";
 
-function App() {
+export default function App() {
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [files, setFiles] = useState<ReceivedFile[]>([]);
   const [directory, setDirectory] = useState("");
@@ -26,8 +21,7 @@ function App() {
   });
   const [receivedCount, setReceivedCount] = useState(0);
   const [filesLoading, setFilesLoading] = useState(false);
-  const [apiOnline, setApiOnline] = useState(false);
-  const hosted = isHostedDeployment();
+  const [apiOnline, setApiOnline] = useState(true);
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -92,11 +86,6 @@ function App() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {hosted && (
-              <Badge variant="secondary" className="hidden sm:inline-flex">
-                Vercel
-              </Badge>
-            )}
             <Badge variant={apiOnline ? "success" : "destructive"}>
               API {apiOnline ? "Online" : "Offline"}
             </Badge>
@@ -120,7 +109,19 @@ function App() {
           </div>
         </div>
 
-        {!apiOnline && <ApiConnection onConnected={refreshAll} />}
+        {!apiOnline && (
+          <div className="mb-6 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            Cannot connect to API server. Double-click{" "}
+            <code className="rounded bg-destructive/10 px-1.5 py-0.5 font-mono text-xs">start.bat</code>{" "}
+            or run:{" "}
+            <code className="rounded bg-destructive/10 px-1.5 py-0.5 font-mono text-xs">
+              python start.py
+            </code>
+            <span className="block mt-1 text-muted-foreground">
+              This automatically starts api_server.py and opens the UI. No pip required.
+            </span>
+          </div>
+        )}
 
         <Tabs defaultValue="dashboard" className="space-y-6">
           <TabsList>
@@ -165,15 +166,3 @@ function App() {
     </div>
   );
 }
-
-const rootEl = document.getElementById("root");
-if (rootEl) {
-  createRoot(rootEl).render(
-    <StrictMode>
-      <App />
-      <Toaster richColors position="top-right" />
-    </StrictMode>
-  );
-}
-
-export default App;

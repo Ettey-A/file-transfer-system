@@ -1,17 +1,61 @@
-import { getApiBase } from "./config";
-import type { ReceivedFile, SystemStatus, TransferJob, TransferStats } from "./api.types";
+export interface ServerInfo {
+  running: boolean;
+  port: number;
+  address: string;
+  save_dir: string;
+}
 
-export type {
-  ServerInfo,
-  SessionStats,
-  SystemStatus,
-  TransferStats,
-  ReceivedFile,
-  TransferJob,
-} from "./api.types";
+export interface SessionStats {
+  sent_total: number;
+  sent_completed: number;
+  sent_failed: number;
+  sent_active: number;
+  received_total: number;
+}
+
+export interface SystemStatus {
+  local_ip: string;
+  servers: {
+    tcp: ServerInfo;
+    udp: ServerInfo;
+  };
+  active_transfers: number;
+  stats: SessionStats;
+}
+
+export interface TransferStats {
+  total: number;
+  completed: number;
+  failed: number;
+  active: number;
+}
+
+export interface ReceivedFile {
+  name: string;
+  size: number;
+  size_formatted: string;
+  modified: string;
+}
+
+export interface TransferJob {
+  id: string;
+  status: "queued" | "connecting" | "transferring" | "completed" | "failed";
+  protocol: string;
+  host: string;
+  port: number;
+  filename: string;
+  filesize: number;
+  sent: number;
+  progress: number;
+  created_at: string;
+  completed_at?: string;
+  error?: string;
+}
+
+const API_BASE = "/api";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${getApiBase()}${path}`, options);
+  const res = await fetch(`${API_BASE}${path}`, options);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || "Request failed");
@@ -23,13 +67,7 @@ export const api = {
   getStatus: () => request<SystemStatus>("/status"),
 
   startServer: (protocol: "tcp" | "udp") =>
-    request<{
-      message: string;
-      running: boolean;
-      local_ip: string;
-      address: string;
-      api_running: boolean;
-    }>("/server/start", {
+    request<{ message: string; running: boolean; local_ip: string; address: string; api_running: boolean }>("/server/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ protocol }),
@@ -42,11 +80,9 @@ export const api = {
       body: JSON.stringify({ protocol }),
     }),
 
-  listFiles: () =>
-    request<{ files: ReceivedFile[]; directory: string; count: number }>("/files"),
+  listFiles: () => request<{ files: ReceivedFile[]; directory: string; count: number }>("/files"),
 
-  downloadFile: (filename: string) =>
-    `${getApiBase()}/files/download/${encodeURIComponent(filename)}`,
+  downloadFile: (filename: string) => `${API_BASE}/files/download/${encodeURIComponent(filename)}`,
 
   transferFile: (file: File, host: string, port: number, protocol: "tcp" | "udp") => {
     const form = new FormData();
@@ -68,6 +104,4 @@ export const api = {
       stats: TransferStats;
       received_count: number;
     }>("/transfers"),
-
-  health: () => request<{ status: string }>("/health"),
 };

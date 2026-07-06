@@ -21,11 +21,17 @@ function pythonApiPlugin(): Plugin {
   };
 }
 
-export default defineConfig(({ command }) => ({
-  plugins: [react(), tailwindcss(), ...(command === "serve" ? [pythonApiPlugin()] : [])],
+export default defineConfig({
+  plugins: [react(), tailwindcss(), pythonApiPlugin()],
+  root: path.resolve(__dirname),
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+    },
+  },
+  build: {
+    rollupOptions: {
+      input: path.resolve(__dirname, "index.html"),
     },
   },
   server: {
@@ -37,9 +43,4 @@ export default defineConfig(({ command }) => ({
       },
     },
   },
-  build: {
-    rollupOptions: {
-      input: path.resolve(__dirname, "index.html"),
-    },
-  },
-}));
+});

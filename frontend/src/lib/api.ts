@@ -17,6 +17,7 @@ export interface SessionStats {
 
 export interface SystemStatus {
   local_ip: string;
+  detected_ip: string;
   server: ServerInfo;
   active_transfers: number;
   stats: SessionStats;

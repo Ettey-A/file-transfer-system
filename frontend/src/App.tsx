@@ -115,10 +115,10 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {hosted && backendReady && status?.local_ip && (
+            {hosted && backendReady && status?.detected_ip && (
               <Badge variant="outline" className="gap-1.5 font-mono">
                 <Monitor className="h-3 w-3" />
-                Your PC: {status.local_ip}
+                API PC: {status.detected_ip}
               </Badge>
             )}
             <Badge variant={apiOnline ? "success" : "destructive"}>
@@ -181,7 +181,6 @@ export default function App() {
                   />
                 </div>
                 <FileUpload
-                  localIp={status?.local_ip}
                   serverRunning={status?.server.running}
                   onTransferComplete={refreshAll}
                 />

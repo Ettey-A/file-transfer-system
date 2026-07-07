@@ -1,10 +1,13 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Play, Square, Server, Wifi, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { api, type SystemStatus } from "@/lib/api";
+import { getServerIp, setServerIp } from "@/lib/networkConfig";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 
 interface ServerPanelProps {
@@ -15,10 +18,21 @@ interface ServerPanelProps {
 
 export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) {
   const [loading, setLoading] = useState(false);
+  const [serverIp, setServerIpState] = useState(() => getServerIp());
+  const detectedIp = status?.detected_ip ?? "";
+
+  useEffect(() => {
+    setServerIp(serverIp);
+  }, [serverIp]);
 
   const handleStart = useCallback(async () => {
     if (!apiOnline) {
       toast.error("Run python start.py first to launch the API server");
+      return;
+    }
+
+    if (!serverIp.trim()) {
+      toast.error("Enter your server IP address first");
       return;
     }
 
@@ -37,7 +51,7 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
     } finally {
       setLoading(false);
     }
-  }, [apiOnline, onRefresh]);
+  }, [apiOnline, onRefresh, serverIp]);
 
   const handleStop = useCallback(async () => {
     setLoading(true);
@@ -54,6 +68,7 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
   }, [onRefresh]);
 
   const server = status?.server;
+  const displayIp = serverIp.trim();
 
   return (
     <Card>
@@ -65,7 +80,7 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
           <div>
             <CardTitle>TCP Receiver</CardTitle>
             <CardDescription>
-              Start the TCP server on this PC only — each computer controls its own receiver
+              Set your server IP and start TCP on this PC — independent from the send panel
             </CardDescription>
           </div>
         </div>
@@ -80,18 +95,45 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
 
         {status && server ? (
           <>
-            <div className="rounded-lg border border-muted bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-              Controlling <strong className="text-foreground font-mono">{status.local_ip}</strong> —
-              start/stop only affects this connected PC.
+            <div className="space-y-2">
+              <Label htmlFor="server-ip">Server IP (share with senders)</Label>
+              <Input
+                id="server-ip"
+                value={serverIp}
+                onChange={(e) => setServerIpState(e.target.value)}
+                placeholder="e.g. 192.168.1.50"
+                className="font-mono"
+              />
+              {detectedIp && (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span>
+                    Detected on this PC: <span className="font-mono">{detectedIp}</span>
+                  </span>
+                  <button
+                    type="button"
+                    className="text-primary hover:underline"
+                    onClick={() => setServerIpState(detectedIp)}
+                  >
+                    Use detected
+                  </button>
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                This is the IP others use to send files to <strong>this</strong> machine. It is
+                separate from the receiver IP in the send panel.
+              </p>
             </div>
-            {server.running && (
+
+            {server.running && displayIp && (
               <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
                 <div className="flex items-center justify-between gap-2">
                   <div>
-                    <p className="text-sm font-medium">This PC&apos;s IP address</p>
-                    <p className="text-lg font-mono font-semibold text-primary">{status.local_ip}</p>
+                    <p className="text-sm font-medium">Your server address</p>
+                    <p className="text-lg font-mono font-semibold text-primary">
+                      {displayIp}:{server.port}
+                    </p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Senders on your network should use this IP on port {server.port}
+                      Give this IP and port to anyone sending files to you
                     </p>
                   </div>
                   <Button
@@ -99,8 +141,8 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
                     size="sm"
                     className="shrink-0 gap-1.5"
                     onClick={() => {
-                      navigator.clipboard.writeText(status.local_ip);
-                      toast.success("IP copied to clipboard");
+                      navigator.clipboard.writeText(`${displayIp}:${server.port}`);
+                      toast.success("Server address copied");
                     }}
                   >
                     <Copy className="h-3.5 w-3.5" />
@@ -120,9 +162,9 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
                     </Badge>
                   </div>
                   <p className="text-sm text-muted-foreground">Port {server.port}</p>
-                  {server.running && (
+                  {server.running && displayIp && (
                     <p className="text-sm font-mono font-medium text-primary">
-                      {status.local_ip}:{server.port}
+                      Listening — share {displayIp}:{server.port}
                     </p>
                   )}
                 </div>
@@ -130,7 +172,7 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
                   <Button
                     size="sm"
                     onClick={handleStart}
-                    disabled={loading || server.running}
+                    disabled={loading || server.running || !displayIp}
                     className="gap-1.5"
                   >
                     <Play className="h-3.5 w-3.5" />

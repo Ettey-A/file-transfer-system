@@ -413,16 +413,17 @@ class TransferAPIHandler(BaseHTTPRequestHandler):
             )
 
         if path == "/api/status":
-            local_ip = get_local_ip()
+            detected_ip = get_local_ip()
             stats = _session_stats()
             return _json_response(
                 self,
                 {
-                    "local_ip": local_ip,
+                    "local_ip": detected_ip,
+                    "detected_ip": detected_ip,
                     "server": {
                         "running": _tcp_running(),
                         "port": TCP_PORT,
-                        "address": f"{local_ip}:{TCP_PORT}",
+                        "address": f"{detected_ip}:{TCP_PORT}",
                         "save_dir": DEFAULT_SAVE_DIR,
                     },
                     "active_transfers": stats["sent_active"],

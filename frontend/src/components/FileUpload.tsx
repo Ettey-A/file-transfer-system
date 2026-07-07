@@ -1,7 +1,8 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CloudUpload, File, Send, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, type TransferJob } from "@/lib/api";
+import { getClientReceiverIp, setClientReceiverIp } from "@/lib/networkConfig";
 import { formatBytes } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,14 +12,13 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 
 interface FileUploadProps {
-  localIp?: string;
   serverRunning?: boolean;
   onTransferComplete: () => void;
 }
 
-export function FileUpload({ localIp, serverRunning, onTransferComplete }: FileUploadProps) {
+export function FileUpload({ serverRunning, onTransferComplete }: FileUploadProps) {
   const [file, setFile] = useState<File | null>(null);
-  const [host, setHost] = useState("127.0.0.1");
+  const [receiverIp, setReceiverIpState] = useState(() => getClientReceiverIp());
   const [port, setPort] = useState("9999");
   const [uploading, setUploading] = useState(false);
   const [activeJob, setActiveJob] = useState<TransferJob | null>(null);
@@ -26,6 +26,10 @@ export function FileUpload({ localIp, serverRunning, onTransferComplete }: FileU
   const inputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollStartedRef = useRef<number>(0);
+
+  useEffect(() => {
+    setClientReceiverIp(receiverIp);
+  }, [receiverIp]);
 
   const pollJob = useCallback(
     (jobId: string) => {
@@ -75,6 +79,12 @@ export function FileUpload({ localIp, serverRunning, onTransferComplete }: FileU
       return;
     }
 
+    const targetHost = receiverIp.trim();
+    if (!targetHost) {
+      toast.error("Enter the receiver IP address you are sending to");
+      return;
+    }
+
     const portNum = parseInt(port, 10);
     if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
       toast.error("Invalid port number");
@@ -83,15 +93,14 @@ export function FileUpload({ localIp, serverRunning, onTransferComplete }: FileU
 
     if (serverRunning === false) {
       toast.warning(
-        "No local receiver is running. Start TCP here only if this PC should receive the file."
+        "No local receiver is running. Only relevant if this PC should receive the file."
       );
     }
 
     setUploading(true);
     try {
-      const targetHost = host.trim() || "127.0.0.1";
       const { job_id } = await api.transferFile(file, targetHost, portNum);
-      toast.info(`Transfer started: ${file.name}`);
+      toast.info(`Transfer started: ${file.name} → ${targetHost}:${portNum}`);
       pollJob(job_id);
     } catch (e) {
       setUploading(false);
@@ -115,7 +124,9 @@ export function FileUpload({ localIp, serverRunning, onTransferComplete }: FileU
           </div>
           <div>
             <CardTitle>Send File</CardTitle>
-            <CardDescription>Transfer a file over TCP to a remote receiver</CardDescription>
+            <CardDescription>
+              Enter the remote receiver IP — separate from your server IP above
+            </CardDescription>
           </div>
         </div>
       </CardHeader>
@@ -178,33 +189,28 @@ export function FileUpload({ localIp, serverRunning, onTransferComplete }: FileU
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="host">Receiver IP</Label>
+            <Label htmlFor="receiver-ip">Receiver IP (client — where to send)</Label>
             <Input
-              id="host"
-              value={host}
-              onChange={(e) => setHost(e.target.value)}
-              placeholder={localIp || "127.0.0.1"}
+              id="receiver-ip"
+              value={receiverIp}
+              onChange={(e) => setReceiverIpState(e.target.value)}
+              placeholder="e.g. 192.168.1.100"
               disabled={uploading}
+              className="font-mono"
             />
-            {localIp && (
-              <button
-                type="button"
-                className="text-xs text-primary hover:underline"
-                onClick={() => setHost(localIp)}
-                disabled={uploading}
-              >
-                Use this PC ({localIp})
-              </button>
-            )}
+            <p className="text-xs text-muted-foreground">
+              IP of the machine running the TCP receiver. Not auto-filled from your server IP.
+            </p>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="port">Port</Label>
+            <Label htmlFor="port">Receiver port</Label>
             <Input
               id="port"
               value={port}
               onChange={(e) => setPort(e.target.value)}
               placeholder="9999"
               disabled={uploading}
+              className="font-mono"
             />
           </div>
         </div>
@@ -222,12 +228,6 @@ export function FileUpload({ localIp, serverRunning, onTransferComplete }: FileU
               {activeJob.progress}% — {formatBytes(activeJob.sent)} / {formatBytes(activeJob.filesize)}
             </p>
           </div>
-        )}
-
-        {serverRunning === false && (
-          <p className="text-xs text-muted-foreground">
-            Sending to another PC? Enter its IP and start TCP on that machine first.
-          </p>
         )}
 
         <Button onClick={handleSend} disabled={!file || uploading} className="w-full gap-2" size="lg">

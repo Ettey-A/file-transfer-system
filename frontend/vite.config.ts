@@ -21,8 +21,8 @@ function pythonApiPlugin(): Plugin {
   };
 }
 
-export default defineConfig({
-  plugins: [react(), tailwindcss(), pythonApiPlugin()],
+export default defineConfig(({ command }) => ({
+  plugins: [react(), tailwindcss(), ...(command === "serve" ? [pythonApiPlugin()] : [])],
   root: path.resolve(__dirname),
   resolve: {
     alias: {
@@ -43,4 +43,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

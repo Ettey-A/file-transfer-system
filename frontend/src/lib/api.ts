@@ -1,3 +1,5 @@
+import { getApiBase } from "./config";
+
 export interface ServerInfo {
   running: boolean;
   port: number;
@@ -52,10 +54,8 @@ export interface TransferJob {
   error?: string;
 }
 
-const API_BASE = "/api";
-
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, options);
+  const res = await fetch(`${getApiBase()}${path}`, options);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || "Request failed");
@@ -67,7 +67,13 @@ export const api = {
   getStatus: () => request<SystemStatus>("/status"),
 
   startServer: (protocol: "tcp" | "udp") =>
-    request<{ message: string; running: boolean; local_ip: string; address: string; api_running: boolean }>("/server/start", {
+    request<{
+      message: string;
+      running: boolean;
+      local_ip: string;
+      address: string;
+      api_running: boolean;
+    }>("/server/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ protocol }),
@@ -80,9 +86,11 @@ export const api = {
       body: JSON.stringify({ protocol }),
     }),
 
-  listFiles: () => request<{ files: ReceivedFile[]; directory: string; count: number }>("/files"),
+  listFiles: () =>
+    request<{ files: ReceivedFile[]; directory: string; count: number }>("/files"),
 
-  downloadFile: (filename: string) => `${API_BASE}/files/download/${encodeURIComponent(filename)}`,
+  downloadFile: (filename: string) =>
+    `${getApiBase()}/files/download/${encodeURIComponent(filename)}`,
 
   transferFile: (file: File, host: string, port: number, protocol: "tcp" | "udp") => {
     const form = new FormData();
@@ -104,4 +112,6 @@ export const api = {
       stats: TransferStats;
       received_count: number;
     }>("/transfers"),
+
+  health: () => request<{ status: string }>("/health"),
 };

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { CloudUpload, File, Send, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, type TransferJob } from "@/lib/api";
@@ -33,12 +33,7 @@ export function FileUpload({ localIp, serversRunning, onTransferComplete }: File
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  useEffect(() => {
-    if (localIp) {
-      setHost((prev) => (prev === "127.0.0.1" || prev === "localhost" ? localIp : prev));
-    }
-  }, [localIp]);
+  const pollStartedRef = useRef<number>(0);
 
   const handleProtocolChange = (value: string) => {
     const p = value as "tcp" | "udp";
@@ -49,8 +44,17 @@ export function FileUpload({ localIp, serversRunning, onTransferComplete }: File
   const pollJob = useCallback(
     (jobId: string) => {
       if (pollRef.current) clearInterval(pollRef.current);
+      pollStartedRef.current = Date.now();
 
       pollRef.current = setInterval(async () => {
+        if (Date.now() - pollStartedRef.current > 120000) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          setUploading(false);
+          setActiveJob(null);
+          toast.error("Transfer timed out. Check receiver IP and that TCP/UDP server is started.");
+          return;
+        }
+
         try {
           const job = await api.getTransfer(jobId);
           setActiveJob(job);
@@ -71,6 +75,8 @@ export function FileUpload({ localIp, serversRunning, onTransferComplete }: File
         } catch {
           if (pollRef.current) clearInterval(pollRef.current);
           setUploading(false);
+          setActiveJob(null);
+          toast.error("Lost connection to API while tracking transfer");
         }
       }, 500);
     },
@@ -87,6 +93,12 @@ export function FileUpload({ localIp, serversRunning, onTransferComplete }: File
     if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
       toast.error("Invalid port number");
       return;
+    }
+
+    if (serversRunning === false) {
+      toast.warning(
+        "No local receiver is running. Start TCP/UDP here only if this PC should receive the file."
+      );
     }
 
     setUploading(true);
@@ -239,8 +251,8 @@ export function FileUpload({ localIp, serversRunning, onTransferComplete }: File
         )}
 
         {serversRunning === false && (
-          <p className="text-xs text-amber-600">
-            Start TCP or UDP receiver on the target PC before sending.
+          <p className="text-xs text-muted-foreground">
+            Sending to another PC? Enter its IP and start TCP/UDP on that machine first.
           </p>
         )}
 

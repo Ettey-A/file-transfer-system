@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { HardDrive, Shield, Zap } from "lucide-react";
 import { api, type ReceivedFile, type SystemStatus, type TransferJob } from "@/lib/api";
+import { ApiConnection } from "@/components/ApiConnection";
 import { FileUpload } from "@/components/FileUpload";
 import { ReceivedFiles } from "@/components/ReceivedFiles";
 import { ServerPanel } from "@/components/ServerPanel";
@@ -109,19 +110,7 @@ export default function App() {
           </div>
         </div>
 
-        {!apiOnline && (
-          <div className="mb-6 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-            Cannot connect to API server. Double-click{" "}
-            <code className="rounded bg-destructive/10 px-1.5 py-0.5 font-mono text-xs">start.bat</code>{" "}
-            or run:{" "}
-            <code className="rounded bg-destructive/10 px-1.5 py-0.5 font-mono text-xs">
-              python start.py
-            </code>
-            <span className="block mt-1 text-muted-foreground">
-              This automatically starts api_server.py and opens the UI. No pip required.
-            </span>
-          </div>
-        )}
+        {!apiOnline && <ApiConnection onConnected={refreshAll} />}
 
         <Tabs defaultValue="dashboard" className="space-y-6">
           <TabsList>

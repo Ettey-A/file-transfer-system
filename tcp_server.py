@@ -43,16 +43,28 @@ def handle_client(client_socket, addr):
                     raise ValueError("Client disconnected before header")
                 header_data += chunk
 
-            header_str = header_data.decode('utf-8').strip()
-            filename, filesize_str = header_str.split('|', 1)
-            filesize = int(filesize_str)
-            
-            # Security: Sanitize filename
-            filename = os.path.basename(filename)
+            pipe_idx = header_data.index(b"|")
+            filename = os.path.basename(header_data[:pipe_idx].decode("utf-8").strip())
+            rest = header_data[pipe_idx + 1 :]
+
+            size_digits = bytearray()
+            extra_start = len(rest)
+            for i, byte in enumerate(rest):
+                if 48 <= byte <= 57:
+                    size_digits.append(byte)
+                else:
+                    extra_start = i
+                    break
+            filesize = int(size_digits) if size_digits else 0
+            initial_data = rest[extra_start:]
+
             filepath = os.path.join(DEFAULT_SAVE_DIR, filename)
 
             received = 0
-            with open(filepath, 'wb') as f:
+            with open(filepath, "wb") as f:
+                if initial_data:
+                    f.write(initial_data)
+                    received += len(initial_data)
                 while received < filesize:
                     chunk = client_socket.recv(BUFFER_SIZE)
                     if not chunk: break

@@ -127,6 +127,10 @@ def _parse_multipart(content_type: str, body: bytes) -> dict[str, dict]:
     return fields
 
 
+CONNECT_TIMEOUT = 10
+TRANSFER_TIMEOUT = 120
+
+
 def _send_file_tcp(job_id: str, host: str, port: int, filepath: str, filename: str):
     filesize = os.path.getsize(filepath)
 
@@ -143,8 +147,11 @@ def _send_file_tcp(job_id: str, host: str, port: int, filepath: str, filename: s
 
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
+        client.settimeout(CONNECT_TIMEOUT)
         client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         client.connect((host, port))
+        client.settimeout(TRANSFER_TIMEOUT)
+
         header = f"{filename}|{filesize}"
         client.sendall(header.encode("utf-8"))
         time.sleep(0.15)
@@ -170,6 +177,22 @@ def _send_file_tcp(job_id: str, host: str, port: int, filepath: str, filename: s
                     "sent": sent,
                     "progress": 100,
                     "completed_at": datetime.now().isoformat(),
+                }
+            )
+    except socket.timeout:
+        with jobs_lock:
+            transfer_jobs[job_id].update(
+                {
+                    "status": "failed",
+                    "error": f"Timed out connecting or sending to {host}:{port}. Check receiver IP and that TCP server is started.",
+                }
+            )
+    except OSError as e:
+        with jobs_lock:
+            transfer_jobs[job_id].update(
+                {
+                    "status": "failed",
+                    "error": f"Cannot reach {host}:{port} — start the TCP receiver first. ({e})",
                 }
             )
     except Exception as e:
@@ -199,6 +222,7 @@ def _send_file_udp(job_id: str, host: str, port: int, filepath: str, filename: s
 
     udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
+        udp_socket.settimeout(TRANSFER_TIMEOUT)
         header = f"{filename}|{filesize}"
         udp_socket.sendto(header.encode("utf-8"), (host, port))
         time.sleep(0.2)
@@ -224,6 +248,22 @@ def _send_file_udp(job_id: str, host: str, port: int, filepath: str, filename: s
                     "sent": sent,
                     "progress": 100,
                     "completed_at": datetime.now().isoformat(),
+                }
+            )
+    except socket.timeout:
+        with jobs_lock:
+            transfer_jobs[job_id].update(
+                {
+                    "status": "failed",
+                    "error": f"UDP transfer timed out sending to {host}:{port}.",
+                }
+            )
+    except OSError as e:
+        with jobs_lock:
+            transfer_jobs[job_id].update(
+                {
+                    "status": "failed",
+                    "error": f"Cannot send UDP to {host}:{port}. ({e})",
                 }
             )
     except Exception as e:

@@ -1,6 +1,6 @@
 /**
- * Legacy Vercel proxy — not used for multi-user setups.
- * Each browser connects directly to its own PC's ngrok URL (stored in localStorage).
+ * Vercel edge /api route — disabled on purpose.
+ * Each user connects directly to their own PC (see lib/config.ts).
  */
 export const config = {
   runtime: "edge",

@@ -1,3 +1,8 @@
+/**
+ * Vite dev server config.
+ * - Proxies /api → localhost:8001
+ * - Optionally auto-starts api_server.py during npm run dev
+ */
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { defineConfig, type Plugin } from "vite";
@@ -6,7 +11,7 @@ import tailwindcss from "@tailwindcss/vite";
 
 function pythonApiPlugin(): Plugin {
   let proc: ChildProcess | null = null;
-  const root = path.resolve(__dirname, "..");
+  const root = path.resolve(__dirname, ".."); // Project root (parent of frontend/)
 
   return {
     name: "python-api-server",
@@ -38,7 +43,7 @@ export default defineConfig(({ command }) => ({
     port: 5173,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8001",
+        target: "http://127.0.0.1:8001", // Forward to Python API
         changeOrigin: true,
       },
     },

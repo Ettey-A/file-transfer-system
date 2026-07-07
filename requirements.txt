@@ -1,4 +1,0 @@
-# No external Python packages required.
-#
-# This project uses only the Python standard library.
-# Just run:  python api_server.py

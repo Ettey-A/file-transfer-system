@@ -1,3 +1,4 @@
+// HTTP client for api_server.py — all paths append to getApiBase()
 import { getApiBase } from "./config";
 
 export interface ServerInfo {
@@ -52,12 +53,23 @@ export interface TransferJob {
   error?: string;
 }
 
+function requestHeaders(extra?: HeadersInit): Headers {
+  const headers = new Headers(extra);
+  const base = getApiBase();
+  if (base.includes("ngrok")) {
+    headers.set("ngrok-skip-browser-warning", "true");
+  }
+  return headers;
+}
+
+/** Shared fetch wrapper — throws if API base missing or HTTP error. */
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const base = getApiBase();
   if (!base) {
     throw new Error("Connect your PC's API URL first — each computer uses its own backend.");
   }
-  const res = await fetch(`${base}${path}`, options);
+  const headers = requestHeaders(options?.headers);
+  const res = await fetch(`${base}${path}`, { ...options, headers });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || err.message || "Request failed");
@@ -68,8 +80,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export const api = {
   getStatus: () => request<SystemStatus>("/status"),
 
-  startServer: () =>
-    request<{
+  startServer: () => {
+    const headers = requestHeaders({ "Content-Type": "application/json" });
+    return request<{
       message: string;
       running: boolean;
       local_ip: string;
@@ -77,16 +90,19 @@ export const api = {
       api_running: boolean;
     }>("/server/start", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({}),
-    }),
+    });
+  },
 
-  stopServer: () =>
-    request<{ message: string; running: boolean }>("/server/stop", {
+  stopServer: () => {
+    const headers = requestHeaders({ "Content-Type": "application/json" });
+    return request<{ message: string; running: boolean }>("/server/stop", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({}),
-    }),
+    });
+  },
 
   listFiles: () =>
     request<{ files: ReceivedFile[]; directory: string; count: number }>("/files"),
@@ -97,7 +113,7 @@ export const api = {
   transferFile: (file: File, host: string, port: number) => {
     const form = new FormData();
     form.append("file", file);
-    form.append("host", host);
+    form.append("host", host); // Client receiver IP from send panel
     form.append("port", String(port));
     return request<{ job_id: string; message: string }>("/transfer", {
       method: "POST",

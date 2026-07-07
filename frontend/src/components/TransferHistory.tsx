@@ -1,3 +1,4 @@
+/** Outbound send history and session stats from api_server transfer_jobs. */
 import type { ElementType } from "react";
 import { ArrowRightLeft, CheckCircle2, Clock, Inbox, Send, XCircle } from "lucide-react";
 import { type TransferJob, type TransferStats } from "@/lib/api";

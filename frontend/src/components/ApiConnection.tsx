@@ -1,3 +1,4 @@
+// Connect browser to THIS PC's api_server (each user on Vercel uses their own ngrok URL)
 import { useState } from "react";
 import { Link2, Save, Unplug } from "lucide-react";
 import { toast } from "sonner";
@@ -22,26 +23,26 @@ interface ApiConnectionProps {
 }
 
 export function ApiConnection({ onConnected, onDisconnected, forceSetup }: ApiConnectionProps) {
-  const hosted = isHostedUI();
+  const hosted = isHostedUI(); // Vercel vs local
   const setupRequired = forceSetup ?? needsBackendSetup();
   const [url, setUrl] = useState(() => getPersonalBackendUrl() ?? "");
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
-    const normalized = normalizeApiBase(url);
+    const normalized = normalizeApiBase(url); // e.g. https://xxx.ngrok-free.app/api
     if (!normalized) {
       toast.error("Enter your PC's API URL");
       return;
     }
 
     setSaving(true);
-    setApiBase(normalized);
+    setApiBase(normalized); // Save to localStorage (this browser only)
     try {
-      await api.health();
+      await api.health(); // Test GET /api/health
       toast.success(hosted ? "Connected to your PC" : "Connected to API");
       onConnected();
     } catch {
-      clearApiBase();
+      clearApiBase(); // Remove bad URL
       toast.error(
         hosted
           ? "Cannot reach your PC. Run python start.py, start ngrok on port 8001, then paste that URL."
@@ -58,6 +59,7 @@ export function ApiConnection({ onConnected, onDisconnected, forceSetup }: ApiCo
     onDisconnected?.();
   };
 
+  // --- Vercel: must paste own ngrok URL (no shared backend) ---
   if (hosted) {
     return (
       <div className="mb-6 rounded-lg border border-primary/30 bg-primary/5 px-4 py-4">
@@ -114,6 +116,7 @@ export function ApiConnection({ onConnected, onDisconnected, forceSetup }: ApiCo
     );
   }
 
+  // --- Local: API offline retry panel ---
   return (
     <div className="mb-6 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-4">
       <div className="flex items-start gap-3">

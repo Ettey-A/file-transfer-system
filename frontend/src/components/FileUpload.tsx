@@ -1,3 +1,4 @@
+// Send File panel — CLIENT role (user types destination IP; separate from server IP)
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CloudUpload, File, Send, X } from "lucide-react";
 import { toast } from "sonner";
@@ -13,12 +14,13 @@ import { Badge } from "@/components/ui/badge";
 
 interface FileUploadProps {
   serverRunning?: boolean;
+  detectedIp?: string;
   onTransferComplete: () => void;
 }
 
-export function FileUpload({ serverRunning, onTransferComplete }: FileUploadProps) {
+export function FileUpload({ serverRunning, detectedIp, onTransferComplete }: FileUploadProps) {
   const [file, setFile] = useState<File | null>(null);
-  const [receiverIp, setReceiverIpState] = useState(() => getClientReceiverIp());
+  const [receiverIp, setReceiverIpState] = useState(() => getClientReceiverIp()); // Destination IP (localStorage)
   const [port, setPort] = useState("9999");
   const [uploading, setUploading] = useState(false);
   const [activeJob, setActiveJob] = useState<TransferJob | null>(null);
@@ -27,10 +29,12 @@ export function FileUpload({ serverRunning, onTransferComplete }: FileUploadProp
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollStartedRef = useRef<number>(0);
 
+  // Save client receiver IP as user types
   useEffect(() => {
     setClientReceiverIp(receiverIp);
   }, [receiverIp]);
 
+  // Poll GET /api/transfer/{id} every 500ms until done or 120s timeout
   const pollJob = useCallback(
     (jobId: string) => {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -99,6 +103,7 @@ export function FileUpload({ serverRunning, onTransferComplete }: FileUploadProp
 
     setUploading(true);
     try {
+      // POST /api/transfer — backend sends file via TCP to targetHost:portNum
       const { job_id } = await api.transferFile(file, targetHost, portNum);
       toast.info(`Transfer started: ${file.name} → ${targetHost}:${portNum}`);
       pollJob(job_id);
@@ -190,16 +195,30 @@ export function FileUpload({ serverRunning, onTransferComplete }: FileUploadProp
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
             <Label htmlFor="receiver-ip">Receiver IP (client — where to send)</Label>
-            <Input
-              id="receiver-ip"
-              value={receiverIp}
-              onChange={(e) => setReceiverIpState(e.target.value)}
-              placeholder="e.g. 192.168.1.100"
-              disabled={uploading}
-              className="font-mono"
-            />
+            <div className="flex gap-2">
+              <Input
+                id="receiver-ip"
+                value={receiverIp}
+                onChange={(e) => setReceiverIpState(e.target.value)}
+                placeholder="e.g. 192.168.1.100 or 127.0.0.1"
+                disabled={uploading}
+                className="font-mono"
+              />
+              {detectedIp && detectedIp !== receiverIp.trim() && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  disabled={uploading}
+                  onClick={() => setReceiverIpState(detectedIp)}
+                >
+                  Use detected
+                </Button>
+              )}
+            </div>
             <p className="text-xs text-muted-foreground">
-              IP of the machine running the TCP receiver. Not auto-filled from your server IP.
+              IP of the machine running the TCP receiver. Defaults to 127.0.0.1 for same-PC tests.
             </p>
           </div>
           <div className="space-y-2">
@@ -230,7 +249,12 @@ export function FileUpload({ serverRunning, onTransferComplete }: FileUploadProp
           </div>
         )}
 
-        <Button onClick={handleSend} disabled={!file || uploading} className="w-full gap-2" size="lg">
+        <Button
+          onClick={handleSend}
+          disabled={!file || uploading || !receiverIp.trim()}
+          className="w-full gap-2"
+          size="lg"
+        >
           <Send className="h-4 w-4" />
           {uploading ? "Transferring..." : "Send File"}
         </Button>

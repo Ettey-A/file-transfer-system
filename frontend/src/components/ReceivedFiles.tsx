@@ -1,3 +1,4 @@
+/** Lists files received by tcp_server on the connected PC (~/Downloads/received_files). */
 import { Download, FileText, FolderOpen, RefreshCw } from "lucide-react";
 import { api, type ReceivedFile } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
@@ -63,6 +64,7 @@ export function ReceivedFiles({ files, directory, onRefresh, loading }: Received
                 <div className="flex shrink-0 items-center gap-3">
                   <Badge variant="secondary">{file.size_formatted}</Badge>
                   <Button variant="ghost" size="icon" asChild>
+                    {/* GET /api/files/download/{name} */}
                     <a href={api.downloadFile(file.name)} download={file.name}>
                       <Download className="h-4 w-4" />
                     </a>

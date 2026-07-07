@@ -1,3 +1,4 @@
+// TCP Receiver panel — SERVER role (user types server IP; start/stop on connected PC)
 import { useCallback, useEffect, useState } from "react";
 import { Play, Square, Server, Wifi, Copy } from "lucide-react";
 import { toast } from "sonner";
@@ -17,10 +18,11 @@ interface ServerPanelProps {
 }
 
 export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) {
-  const [loading, setLoading] = useState(false);
-  const [serverIp, setServerIpState] = useState(() => getServerIp());
-  const detectedIp = status?.detected_ip ?? "";
+  const [loading, setLoading] = useState(false); // Disable buttons during API call
+  const [serverIp, setServerIpState] = useState(() => getServerIp()); // User-entered server IP (localStorage)
+  const detectedIp = status?.detected_ip ?? ""; // Auto-detected hint from backend
 
+  // Persist server IP whenever user types
   useEffect(() => {
     setServerIp(serverIp);
   }, [serverIp]);
@@ -38,7 +40,7 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
 
     setLoading(true);
     try {
-      const res = await api.startServer();
+      const res = await api.startServer(); // POST /api/server/start → tcp_server on this PC
       if (res.running) {
         toast.success(res.message);
       } else {
@@ -56,7 +58,7 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
   const handleStop = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.stopServer();
+      const res = await api.stopServer(); // POST /api/server/stop → release port 9999
       toast.info(res.message);
       onRefresh();
     } catch (e) {
@@ -68,7 +70,7 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
   }, [onRefresh]);
 
   const server = status?.server;
-  const displayIp = serverIp.trim();
+  const displayIp = serverIp.trim(); // IP shown to senders (user input, not auto)
 
   return (
     <Card>
@@ -95,6 +97,7 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
 
         {status && server ? (
           <>
+            {/* User types the IP others use to reach THIS machine as receiver */}
             <div className="space-y-2">
               <Label htmlFor="server-ip">Server IP (share with senders)</Label>
               <Input

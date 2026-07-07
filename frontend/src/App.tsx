@@ -1,3 +1,4 @@
+// Main dashboard: polls API, shows receiver + sender panels
 import { useCallback, useEffect, useState } from "react";
 import { HardDrive, Monitor, Shield, Zap } from "lucide-react";
 import { api, type ReceivedFile, type SystemStatus, type TransferJob } from "@/lib/api";
@@ -12,10 +13,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { isHostedUI, needsBackendSetup } from "@/lib/config";
 
 export default function App() {
-  const [status, setStatus] = useState<SystemStatus | null>(null);
-  const [files, setFiles] = useState<ReceivedFile[]>([]);
-  const [directory, setDirectory] = useState("");
-  const [transfers, setTransfers] = useState<TransferJob[]>([]);
+  // --- State from API ---
+  const [status, setStatus] = useState<SystemStatus | null>(null); // GET /api/status
+  const [files, setFiles] = useState<ReceivedFile[]>([]);         // GET /api/files
+  const [directory, setDirectory] = useState("");                   // Save folder path
+  const [transfers, setTransfers] = useState<TransferJob[]>([]);    // GET /api/transfers
   const [transferStats, setTransferStats] = useState({
     total: 0,
     completed: 0,
@@ -24,11 +26,14 @@ export default function App() {
   });
   const [receivedCount, setReceivedCount] = useState(0);
   const [filesLoading, setFilesLoading] = useState(false);
-  const [apiOnline, setApiOnline] = useState(false);
-  const [backendReady, setBackendReady] = useState(() => !needsBackendSetup());
-  const [showConnectionPanel, setShowConnectionPanel] = useState(false);
-  const hosted = isHostedUI();
 
+  // --- Connection state ---
+  const [apiOnline, setApiOnline] = useState(false);
+  const [backendReady, setBackendReady] = useState(() => !needsBackendSetup()); // false on Vercel until ngrok URL set
+  const [showConnectionPanel, setShowConnectionPanel] = useState(false);
+  const hosted = isHostedUI(); // true on Vercel
+
+  // Fetch server running state + detected IP
   const refreshStatus = useCallback(async () => {
     if (needsBackendSetup()) {
       setApiOnline(false);
@@ -45,6 +50,7 @@ export default function App() {
     }
   }, []);
 
+  // Fetch list of received files on connected PC
   const refreshFiles = useCallback(async () => {
     if (!backendReady) return;
     setFilesLoading(true);
@@ -60,6 +66,7 @@ export default function App() {
     }
   }, [backendReady]);
 
+  // Fetch outbound send history
   const refreshTransfers = useCallback(async () => {
     if (!backendReady) return;
     try {
@@ -91,6 +98,7 @@ export default function App() {
     setShowConnectionPanel(true);
   }, []);
 
+  // Auto-refresh: faster when TCP receiver is running
   useEffect(() => {
     if (!backendReady) return;
     refreshAll();
@@ -103,6 +111,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen">
+      {/* Top bar: title + API status + which PC is connected (hosted) */}
       <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-md">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6">
           <div className="flex items-center gap-3">
@@ -154,6 +163,7 @@ export default function App() {
           </div>
         </div>
 
+        {/* Link browser to this PC's api_server (required on Vercel) */}
         {(showSetup || needsBackendSetup()) && (
           <ApiConnection
             onConnected={handleConnected}
@@ -172,6 +182,7 @@ export default function App() {
             <TabsContent value="dashboard" className="space-y-6">
               <div className="grid gap-6 lg:grid-cols-2">
                 <div className="space-y-6">
+                  {/* Left: TCP receiver (server IP + start/stop) + received files */}
                   <ServerPanel status={status} apiOnline={apiOnline} onRefresh={refreshStatus} />
                   <ReceivedFiles
                     files={files}
@@ -180,8 +191,10 @@ export default function App() {
                     loading={filesLoading}
                   />
                 </div>
+                {/* Right: send file (client receiver IP + upload) */}
                 <FileUpload
                   serverRunning={status?.server.running}
+                  detectedIp={status?.detected_ip}
                   onTransferComplete={refreshAll}
                 />
               </div>

@@ -47,16 +47,43 @@ jobs_lock = threading.Lock()
 
 
 def get_local_ip() -> str:
-    """Detect LAN IP hint for UI (users still type server/client IPs separately)."""
+    """Detect primary LAN IP (route used to reach the internet)."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))  # No data sent; kernel picks route
             return s.getsockname()[0]
     except OSError:
-        try:
-            return socket.gethostbyname(socket.gethostname())
-        except OSError:
-            return "127.0.0.1"
+        pass
+
+    for ip in get_all_local_ips():
+        if not ip.startswith("127."):
+            return ip
+    return "127.0.0.1"
+
+
+def get_all_local_ips() -> list[str]:
+    """Collect non-loopback IPv4 addresses on this PC."""
+    found: list[str] = []
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            primary = s.getsockname()[0]
+            if not primary.startswith("127."):
+                found.append(primary)
+    except OSError:
+        pass
+
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip.startswith("127.") or ip in found:
+                continue
+            found.append(ip)
+    except OSError:
+        pass
+
+    return found or ["127.0.0.1"]
 
 
 def _json_response(handler: BaseHTTPRequestHandler, data: dict, status: int = 200):
@@ -363,6 +390,18 @@ def _stop_tcp() -> dict:
     }
 
 
+def _tcp_start_payload(running: bool, local_ip: str, address: str, message: str) -> dict:
+    """Shared fields returned when starting or querying the TCP receiver."""
+    return {
+        "running": running,
+        "local_ip": local_ip,
+        "detected_ip": local_ip,
+        "detected_ips": get_all_local_ips(),
+        "address": address,
+        "message": message,
+    }
+
+
 def _start_tcp() -> dict:
     """API: start TCP receiver thread on this PC only."""
     global server_running, server_thread
@@ -371,12 +410,9 @@ def _start_tcp() -> dict:
 
     with servers_lock:
         if _tcp_running():
-            return {
-                "running": True,
-                "local_ip": local_ip,
-                "address": address,
-                "message": f"TCP server already running on this PC at {address}",
-            }
+            return _tcp_start_payload(
+                True, local_ip, address, f"TCP server already running on this PC at {address}"
+            )
 
         if server_thread and server_thread.is_alive():
             _stop_tcp_unlocked()
@@ -386,30 +422,24 @@ def _start_tcp() -> dict:
 
         if not wait_tcp_ready(5.0):
             _stop_tcp_unlocked()
-            return {
-                "running": False,
-                "local_ip": local_ip,
-                "address": address,
-                "message": "TCP server failed to start on this PC (timed out)",
-            }
+            return _tcp_start_payload(
+                False, local_ip, address, "TCP server failed to start on this PC (timed out)"
+            )
 
         bind_error = get_tcp_bind_error()
         if bind_error:
             _stop_tcp_unlocked()
-            return {
-                "running": False,
-                "local_ip": local_ip,
-                "address": address,
-                "message": f"TCP server failed to start on this PC: {bind_error}",
-            }
+            return _tcp_start_payload(
+                False,
+                local_ip,
+                address,
+                f"TCP server failed to start on this PC: {bind_error}",
+            )
 
         server_running = True
-        return {
-            "running": True,
-            "local_ip": local_ip,
-            "address": address,
-            "message": f"TCP server started on this PC at {address}",
-        }
+        return _tcp_start_payload(
+            True, local_ip, address, f"TCP server started on this PC at {address}"
+        )
 
 
 def _serve_static(handler: BaseHTTPRequestHandler, rel_path: str):
@@ -471,12 +501,14 @@ class TransferAPIHandler(BaseHTTPRequestHandler):
 
         if path == "/api/status":
             detected_ip = get_local_ip()
+            detected_ips = get_all_local_ips()
             stats = _session_stats()
             return _json_response(
                 self,
                 {
                     "local_ip": detected_ip,
                     "detected_ip": detected_ip,
+                    "detected_ips": detected_ips,
                     "server": {
                         "running": _tcp_running(),
                         "port": TCP_PORT,
@@ -563,6 +595,8 @@ class TransferAPIHandler(BaseHTTPRequestHandler):
                         "message": result["message"],
                         "running": result["running"],
                         "local_ip": result["local_ip"],
+                        "detected_ip": result.get("detected_ip", result["local_ip"]),
+                        "detected_ips": result.get("detected_ips", []),
                         "address": result["address"],
                         "api_running": True,
                     },

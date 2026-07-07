@@ -19,6 +19,7 @@ export interface SessionStats {
 export interface SystemStatus {
   local_ip: string;
   detected_ip: string;
+  detected_ips?: string[];
   server: ServerInfo;
   active_transfers: number;
   stats: SessionStats;
@@ -86,6 +87,8 @@ export const api = {
       message: string;
       running: boolean;
       local_ip: string;
+      detected_ip?: string;
+      detected_ips?: string[];
       address: string;
       api_running: boolean;
     }>("/server/start", {

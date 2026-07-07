@@ -1,4 +1,4 @@
-// TCP Receiver panel — SERVER role (user types server IP; start/stop on connected PC)
+// TCP Receiver panel — auto-detects this PC's IP when starting the server
 import { useCallback, useEffect, useState } from "react";
 import { Play, Square, Server, Wifi, Copy } from "lucide-react";
 import { toast } from "sonner";
@@ -17,15 +17,31 @@ interface ServerPanelProps {
   onRefresh: () => void;
 }
 
-export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) {
-  const [loading, setLoading] = useState(false); // Disable buttons during API call
-  const [serverIp, setServerIpState] = useState(() => getServerIp()); // User-entered server IP (localStorage)
-  const detectedIp = status?.detected_ip ?? ""; // Auto-detected hint from backend
+function pickDetectedIp(status: SystemStatus | null): string {
+  return status?.detected_ip || status?.detected_ips?.[0] || status?.local_ip || "";
+}
 
-  // Persist server IP whenever user types
+export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) {
+  const [loading, setLoading] = useState(false);
+  const [serverIp, setServerIpState] = useState(() => getServerIp());
+  const detectedIp = pickDetectedIp(status);
+  const detectedIps = status?.detected_ips?.length ? status.detected_ips : detectedIp ? [detectedIp] : [];
+
+  // Auto-fill server IP when the API reports this PC's address
+  useEffect(() => {
+    if (!detectedIp) return;
+    if (!serverIp.trim() || serverIp === "127.0.0.1") {
+      setServerIpState(detectedIp);
+    }
+  }, [detectedIp, serverIp]);
+
   useEffect(() => {
     setServerIp(serverIp);
   }, [serverIp]);
+
+  const applyDetectedIp = useCallback((ip: string) => {
+    if (ip) setServerIpState(ip);
+  }, []);
 
   const handleStart = useCallback(async () => {
     if (!apiOnline) {
@@ -33,16 +49,24 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
       return;
     }
 
-    if (!serverIp.trim()) {
-      toast.error("Enter your server IP address first");
-      return;
+    const ipToUse = serverIp.trim() || detectedIp;
+    if (ipToUse && ipToUse !== serverIp.trim()) {
+      setServerIpState(ipToUse);
     }
 
     setLoading(true);
     try {
-      const res = await api.startServer(); // POST /api/server/start → tcp_server on this PC
+      const res = await api.startServer();
+      const autoIp = res.detected_ip || res.local_ip;
+      if (autoIp) {
+        setServerIpState(autoIp);
+      }
       if (res.running) {
-        toast.success(res.message);
+        toast.success(
+          autoIp
+            ? `${res.message} — detected IP: ${autoIp}`
+            : res.message
+        );
       } else {
         toast.error(res.message);
       }
@@ -53,12 +77,12 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
     } finally {
       setLoading(false);
     }
-  }, [apiOnline, onRefresh, serverIp]);
+  }, [apiOnline, detectedIp, onRefresh, serverIp]);
 
   const handleStop = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.stopServer(); // POST /api/server/stop → release port 9999
+      const res = await api.stopServer();
       toast.info(res.message);
       onRefresh();
     } catch (e) {
@@ -70,7 +94,7 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
   }, [onRefresh]);
 
   const server = status?.server;
-  const displayIp = serverIp.trim(); // IP shown to senders (user input, not auto)
+  const displayIp = serverIp.trim() || detectedIp;
 
   return (
     <Card>
@@ -82,7 +106,7 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
           <div>
             <CardTitle>TCP Receiver</CardTitle>
             <CardDescription>
-              Set your server IP and start TCP on this PC — independent from the send panel
+              IP is detected automatically when you start the server on this PC
             </CardDescription>
           </div>
         </div>
@@ -97,33 +121,40 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
 
         {status && server ? (
           <>
-            {/* User types the IP others use to reach THIS machine as receiver */}
             <div className="space-y-2">
               <Label htmlFor="server-ip">Server IP (share with senders)</Label>
               <Input
                 id="server-ip"
                 value={serverIp}
                 onChange={(e) => setServerIpState(e.target.value)}
-                placeholder="e.g. 192.168.1.50"
+                placeholder={detectedIp || "Detecting..."}
                 className="font-mono"
               />
-              {detectedIp && (
-                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <span>
-                    Detected on this PC: <span className="font-mono">{detectedIp}</span>
-                  </span>
-                  <button
-                    type="button"
-                    className="text-primary hover:underline"
-                    onClick={() => setServerIpState(detectedIp)}
-                  >
-                    Use detected
-                  </button>
+              {detectedIps.length > 0 && (
+                <div className="space-y-1 text-xs text-muted-foreground">
+                  <p>
+                    Detected on this PC:{" "}
+                    <span className="font-mono text-foreground">{detectedIps.join(", ")}</span>
+                  </p>
+                  {detectedIps.length > 1 && (
+                    <div className="flex flex-wrap gap-2">
+                      {detectedIps.map((ip) => (
+                        <button
+                          key={ip}
+                          type="button"
+                          className="text-primary hover:underline font-mono"
+                          onClick={() => applyDetectedIp(ip)}
+                        >
+                          Use {ip}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
               <p className="text-xs text-muted-foreground">
-                This is the IP others use to send files to <strong>this</strong> machine. It is
-                separate from the receiver IP in the send panel.
+                Click Start to detect and use this PC&apos;s IP automatically. Override only if
+                needed.
               </p>
             </div>
 
@@ -175,7 +206,7 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
                   <Button
                     size="sm"
                     onClick={handleStart}
-                    disabled={loading || server.running || !displayIp}
+                    disabled={loading || server.running}
                     className="gap-1.5"
                   >
                     <Play className="h-3.5 w-3.5" />

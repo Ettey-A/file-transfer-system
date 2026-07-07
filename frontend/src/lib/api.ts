@@ -1,5 +1,5 @@
 // HTTP client for api_server.py — all paths append to getApiBase()
-import { getApiBase } from "./config";
+import { getApiBase, usesDirectNgrok } from "./config";
 
 export interface ServerInfo {
   running: boolean;
@@ -56,8 +56,7 @@ export interface TransferJob {
 
 function requestHeaders(extra?: HeadersInit): Headers {
   const headers = new Headers(extra);
-  const base = getApiBase();
-  if (base.includes("ngrok")) {
+  if (usesDirectNgrok()) {
     headers.set("ngrok-skip-browser-warning", "true");
   }
   return headers;
@@ -67,7 +66,9 @@ function requestHeaders(extra?: HeadersInit): Headers {
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const base = getApiBase();
   if (!base) {
-    throw new Error("Connect your PC's API URL first — each computer uses its own backend.");
+    throw new Error(
+      "Connect to the transfer server first — paste your ngrok URL or configure BACKEND_URL on Vercel."
+    );
   }
   const headers = requestHeaders(options?.headers);
   const res = await fetch(`${base}${path}`, { ...options, headers });
@@ -112,6 +113,20 @@ export const api = {
 
   downloadFile: (filename: string) =>
     `${getApiBase()}/files/download/${encodeURIComponent(filename)}`,
+
+  downloadFileBlob: async (filename: string) => {
+    const base = getApiBase();
+    if (!base) throw new Error("API not connected");
+    const headers = requestHeaders();
+    const res = await fetch(`${base}/files/download/${encodeURIComponent(filename)}`, {
+      headers,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Download failed");
+    }
+    return res.blob();
+  },
 
   transferFile: (file: File, host: string, port: number) => {
     const form = new FormData();

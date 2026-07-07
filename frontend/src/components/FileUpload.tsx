@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CloudUpload, File, Send, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, type TransferJob } from "@/lib/api";
+import { isHostedUI, usesHostedProxy } from "@/lib/config";
 import { getClientReceiverIp, setClientReceiverIp } from "@/lib/networkConfig";
 import { formatBytes } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -34,6 +35,8 @@ export function FileUpload({ serverRunning, detectedIp, onTransferComplete }: Fi
   useEffect(() => {
     setClientReceiverIp(receiverIp);
   }, [receiverIp]);
+
+  const hosted = isHostedUI() || usesHostedProxy();
 
   // Poll GET /api/transfer/{id} every 500ms until done or 120s timeout
   const pollJob = useCallback(
@@ -247,7 +250,9 @@ export function FileUpload({ serverRunning, detectedIp, onTransferComplete }: Fi
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              IP of the PC that will receive the file. On that PC, click Start in TCP Receiver first.
+              {hosted
+                ? "Hosted: use 127.0.0.1 if TCP Receiver runs on the same PC as the API server (ngrok host). Otherwise use that PC's LAN IP."
+                : "IP of the PC that will receive the file. On that PC, click Start in TCP Receiver first."}
             </p>
           </div>
           <div className="space-y-2">

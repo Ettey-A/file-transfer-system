@@ -29,7 +29,7 @@ export default function App() {
 
   // --- Connection state ---
   const [apiOnline, setApiOnline] = useState(false);
-  const [backendReady, setBackendReady] = useState(() => !needsBackendSetup()); // false on Vercel until ngrok URL set
+  const [backendReady, setBackendReady] = useState(() => !needsBackendSetup());
   const [showConnectionPanel, setShowConnectionPanel] = useState(false);
   const hosted = isHostedUI(); // true on Vercel
 

@@ -107,7 +107,8 @@ def _send_cors(handler: BaseHTTPRequestHandler):
     handler.send_header("Access-Control-Allow-Origin", "*")
     handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
     handler.send_header(
-        "Access-Control-Allow-Headers", "Content-Type, ngrok-skip-browser-warning"
+        "Access-Control-Allow-Headers",
+        "Content-Type, ngrok-skip-browser-warning, Accept, Authorization",
     )
 
 

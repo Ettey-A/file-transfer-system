@@ -29,7 +29,7 @@ transfers_lock = threading.Lock()
 
 
 def stop_udp_server():
-    """Signal the UDP listener to stop and release the port."""
+    """Stop this machine's UDP listener and release the port."""
     _shutdown.set()
     sock = _listen_socket
     if sock is not None:
@@ -99,7 +99,6 @@ def run_udp_server():
 
             with transfers_lock:
                 if key not in active_transfers:
-                    # Try to parse as new header
                     try:
                         header_str = data.decode("utf-8").strip()
                         if "|" in header_str:
@@ -121,7 +120,6 @@ def run_udp_server():
                     except Exception:
                         pass
 
-                # Handle data chunk for active transfer
                 if key in active_transfers:
                     transfer = active_transfers[key]
                     transfer["file"].write(data)
@@ -138,7 +136,6 @@ def run_udp_server():
                         )
                         del active_transfers[key]
 
-                    # Timeout cleanup
                     if time.time() - transfer["start_time"] > 30:
                         transfer["file"].close()
                         safe_log(f"Timeout: {transfer['filename']} from {addr}")

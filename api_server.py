@@ -42,6 +42,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "frontend" / "dist"
 
 server_threads: dict[str, threading.Thread] = {}
 server_running: dict[str, bool] = {"tcp": False, "udp": False}
+servers_lock = threading.Lock()
 transfer_jobs: dict[str, dict] = {}
 jobs_lock = threading.Lock()
 
@@ -350,6 +351,15 @@ def _session_stats() -> dict:
     }
 
 
+def _protocol_running(protocol: str) -> bool:
+    """Whether this machine's receiver thread is alive for the given protocol."""
+    thread = server_threads.get(protocol)
+    if not thread or not thread.is_alive():
+        server_running[protocol] = False
+        return False
+    return server_running[protocol]
+
+
 def _run_tcp_server():
     try:
         run_automated_server()
@@ -364,8 +374,7 @@ def _run_udp_server():
         server_running["udp"] = False
 
 
-def _stop_protocol(protocol: str) -> dict:
-    """Stop a TCP or UDP receiver thread and release its port."""
+def _stop_protocol_unlocked(protocol: str) -> None:
     protocol = protocol.lower()
     if protocol == "tcp":
         stop_tcp_server()
@@ -379,75 +388,83 @@ def _stop_protocol(protocol: str) -> dict:
     server_running[protocol] = False
     server_threads.pop(protocol, None)
 
+
+def _stop_protocol(protocol: str) -> dict:
+    """Stop this machine's TCP or UDP receiver and release its port."""
+    protocol = protocol.lower()
+    with servers_lock:
+        _stop_protocol_unlocked(protocol)
+
     return {
         "protocol": protocol,
         "running": False,
-        "message": f"{protocol.upper()} server stopped",
+        "message": f"{protocol.upper()} server stopped on this PC",
     }
 
 
 def _start_protocol(protocol: str) -> dict:
-    """Start a TCP or UDP receiver thread."""
+    """Start this machine's TCP or UDP receiver (independent of other PCs)."""
     protocol = protocol.lower()
     local_ip = get_local_ip()
     port = TCP_PORT if protocol == "tcp" else UDP_PORT
     address = f"{local_ip}:{port}"
 
-    thread = server_threads.get(protocol)
-    if server_running[protocol] and thread and thread.is_alive():
+    with servers_lock:
+        if _protocol_running(protocol):
+            return {
+                "protocol": protocol,
+                "running": True,
+                "local_ip": local_ip,
+                "address": address,
+                "message": f"{protocol.upper()} server already running on this PC at {address}",
+            }
+
+        thread = server_threads.get(protocol)
+        if thread and thread.is_alive():
+            _stop_protocol_unlocked(protocol)
+
+        if protocol == "tcp":
+            target = _run_tcp_server
+            wait_ready = wait_tcp_ready
+            get_bind_error = get_tcp_bind_error
+        else:
+            target = _run_udp_server
+            wait_ready = wait_udp_ready
+            get_bind_error = get_udp_bind_error
+
+        thread = threading.Thread(target=target, daemon=True)
+        server_threads[protocol] = thread
+        thread.start()
+
+        if not wait_ready(5.0):
+            _stop_protocol_unlocked(protocol)
+            return {
+                "protocol": protocol,
+                "running": False,
+                "local_ip": local_ip,
+                "address": address,
+                "message": f"{protocol.upper()} server failed to start on this PC (timed out)",
+            }
+
+        bind_error = get_bind_error()
+        if bind_error:
+            _stop_protocol_unlocked(protocol)
+            return {
+                "protocol": protocol,
+                "running": False,
+                "local_ip": local_ip,
+                "address": address,
+                "message": f"{protocol.upper()} server failed to start on this PC: {bind_error}",
+            }
+
+        server_running[protocol] = True
         return {
             "protocol": protocol,
             "running": True,
             "local_ip": local_ip,
             "address": address,
-            "message": f"{protocol.upper()} server already running at {address}",
+            "message": f"{protocol.upper()} server started on this PC at {address}",
         }
-
-    if thread and thread.is_alive():
-        _stop_protocol(protocol)
-
-    if protocol == "tcp":
-        target = _run_tcp_server
-        wait_ready = wait_tcp_ready
-        get_bind_error = get_tcp_bind_error
-    else:
-        target = _run_udp_server
-        wait_ready = wait_udp_ready
-        get_bind_error = get_udp_bind_error
-
-    thread = threading.Thread(target=target, daemon=True)
-    server_threads[protocol] = thread
-    thread.start()
-
-    if not wait_ready(5.0):
-        _stop_protocol(protocol)
-        return {
-            "protocol": protocol,
-            "running": False,
-            "local_ip": local_ip,
-            "address": address,
-            "message": f"{protocol.upper()} server failed to start (timed out)",
-        }
-
-    bind_error = get_bind_error()
-    if bind_error:
-        _stop_protocol(protocol)
-        return {
-            "protocol": protocol,
-            "running": False,
-            "local_ip": local_ip,
-            "address": address,
-            "message": f"{protocol.upper()} server failed to start: {bind_error}",
-        }
-
-    server_running[protocol] = True
-    return {
-        "protocol": protocol,
-        "running": True,
-        "local_ip": local_ip,
-        "address": address,
-        "message": f"{protocol.upper()} server started at {address}",
-    }
 
 
 def _serve_static(handler: BaseHTTPRequestHandler, rel_path: str):
@@ -512,13 +529,13 @@ class TransferAPIHandler(BaseHTTPRequestHandler):
                     "local_ip": local_ip,
                     "servers": {
                         "tcp": {
-                            "running": server_running["tcp"],
+                            "running": _protocol_running("tcp"),
                             "port": TCP_PORT,
                             "address": f"{local_ip}:{TCP_PORT}",
                             "save_dir": DEFAULT_SAVE_DIR,
                         },
                         "udp": {
-                            "running": server_running["udp"],
+                            "running": _protocol_running("udp"),
                             "port": UDP_PORT,
                             "address": f"{local_ip}:{UDP_PORT}",
                             "save_dir": DEFAULT_SAVE_DIR,

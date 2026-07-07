@@ -128,7 +128,9 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
           </div>
           <div>
             <CardTitle>Receiver Servers</CardTitle>
-            <CardDescription>Start TCP or UDP servers to receive incoming files</CardDescription>
+            <CardDescription>
+              Start TCP or UDP on this PC only — each computer controls its own receiver
+            </CardDescription>
           </div>
         </div>
       </CardHeader>

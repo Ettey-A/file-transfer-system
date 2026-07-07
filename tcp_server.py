@@ -25,7 +25,7 @@ _monitor_started = False
 
 
 def stop_tcp_server():
-    """Signal the TCP listener to stop and release the port."""
+    """Stop this machine's TCP listener and release the port."""
     _shutdown.set()
     sock = _listen_socket
     if sock is not None:
@@ -36,11 +36,11 @@ def stop_tcp_server():
 
 
 def wait_tcp_ready(timeout: float = 5.0) -> bool:
-  return _ready.wait(timeout)
+    return _ready.wait(timeout)
 
 
 def get_tcp_bind_error():
-  return _bind_error
+    return _bind_error
 
 def safe_log(message):
     with log_lock:

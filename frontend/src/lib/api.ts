@@ -113,13 +113,18 @@ export const api = {
   transferFile: (file: File, host: string, port: number) => {
     const form = new FormData();
     form.append("file", file);
-    form.append("host", host); // Client receiver IP from send panel
+    form.append("host", host);
     form.append("port", String(port));
     return request<{ job_id: string; message: string }>("/transfer", {
       method: "POST",
       body: form,
     });
   },
+
+  checkReceiver: (host: string, port: number) =>
+    request<{ reachable: boolean; host: string; port: number; message: string }>(
+      `/receiver/check?host=${encodeURIComponent(host)}&port=${encodeURIComponent(String(port))}`
+    ),
 
   getTransfer: (jobId: string) => request<TransferJob>(`/transfer/${jobId}`),
 

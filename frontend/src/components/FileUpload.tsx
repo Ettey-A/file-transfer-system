@@ -25,6 +25,7 @@ export function FileUpload({ serverRunning, detectedIp, onTransferComplete }: Fi
   const [uploading, setUploading] = useState(false);
   const [activeJob, setActiveJob] = useState<TransferJob | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [testingConnection, setTestingConnection] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollStartedRef = useRef<number>(0);
@@ -76,6 +77,34 @@ export function FileUpload({ serverRunning, detectedIp, onTransferComplete }: Fi
     },
     [onTransferComplete]
   );
+
+  const handleTestConnection = async () => {
+    const targetHost = receiverIp.trim();
+    if (!targetHost) {
+      toast.error("Enter the receiver IP first");
+      return;
+    }
+
+    const portNum = parseInt(port, 10);
+    if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
+      toast.error("Invalid port number");
+      return;
+    }
+
+    setTestingConnection(true);
+    try {
+      const result = await api.checkReceiver(targetHost, portNum);
+      if (result.reachable) {
+        toast.success(result.message);
+      } else {
+        toast.error(result.message);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Connection test failed");
+    } finally {
+      setTestingConnection(false);
+    }
+  };
 
   const handleSend = async () => {
     if (!file) {
@@ -218,19 +247,31 @@ export function FileUpload({ serverRunning, detectedIp, onTransferComplete }: Fi
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              IP of the machine running the TCP receiver. Defaults to 127.0.0.1 for same-PC tests.
+              IP of the PC that will receive the file. On that PC, click Start in TCP Receiver first.
             </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="port">Receiver port</Label>
-            <Input
-              id="port"
-              value={port}
-              onChange={(e) => setPort(e.target.value)}
-              placeholder="9999"
-              disabled={uploading}
-              className="font-mono"
-            />
+            <div className="flex gap-2">
+              <Input
+                id="port"
+                value={port}
+                onChange={(e) => setPort(e.target.value)}
+                placeholder="9999"
+                disabled={uploading}
+                className="font-mono"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                disabled={uploading || testingConnection || !receiverIp.trim()}
+                onClick={handleTestConnection}
+              >
+                {testingConnection ? "Testing..." : "Test"}
+              </Button>
+            </div>
           </div>
         </div>
 

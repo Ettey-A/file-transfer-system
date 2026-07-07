@@ -19,7 +19,7 @@ import uuid          # Unique job IDs for transfer tracking
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from tcp_server import (
     DEFAULT_SAVE_DIR,       # ~/Downloads/received_files
@@ -151,6 +151,31 @@ def _parse_multipart(content_type: str, body: bytes) -> dict[str, dict]:
 
 CONNECT_TIMEOUT = 10    # Seconds to establish TCP connection to receiver
 TRANSFER_TIMEOUT = 120  # Seconds for full file send after connected
+PROBE_TIMEOUT = 5       # Quick check before starting a transfer
+
+
+def _probe_tcp_receiver(host: str, port: int, timeout: float = PROBE_TIMEOUT) -> tuple[bool, str]:
+    """Verify the TCP receiver is listening before starting a file send."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(timeout)
+        sock.connect((host, port))
+        return True, f"TCP receiver reachable at {host}:{port}"
+    except socket.timeout:
+        return False, (
+            f"No response from {host}:{port} within {int(timeout)} seconds. "
+            f"On the receiver PC ({host}): open the dashboard, click Start on TCP Receiver, "
+            f"and allow port {port} through the firewall."
+        )
+    except ConnectionRefusedError:
+        return False, (
+            f"Connection refused at {host}:{port}. "
+            "TCP receiver is not running on that PC — click Start in the TCP Receiver panel."
+        )
+    except OSError as e:
+        return False, f"Cannot reach {host}:{port}: {e}"
+    finally:
+        sock.close()
 
 
 def _send_file_tcp(job_id: str, host: str, port: int, filepath: str, filename: str):
@@ -172,10 +197,12 @@ def _send_file_tcp(job_id: str, host: str, port: int, filepath: str, filename: s
         )
 
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    connected = False
     try:
         client.settimeout(CONNECT_TIMEOUT)
         client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         client.connect((host, port))  # User-entered receiver IP from send panel
+        connected = True
         client.settimeout(TRANSFER_TIMEOUT)
 
         header = f"{filename}|{filesize}"
@@ -206,13 +233,15 @@ def _send_file_tcp(job_id: str, host: str, port: int, filepath: str, filename: s
                 }
             )
     except socket.timeout:
-        with jobs_lock:
-            transfer_jobs[job_id].update(
-                {
-                    "status": "failed",
-                    "error": f"Timed out connecting or sending to {host}:{port}. Check receiver IP and that TCP server is started.",
-                }
+        if not connected:
+            err = (
+                f"Timed out connecting to {host}:{port}. "
+                "Start the TCP receiver on that PC and verify the IP and firewall."
             )
+        else:
+            err = f"Transfer to {host}:{port} stalled while sending data. Try again."
+        with jobs_lock:
+            transfer_jobs[job_id].update({"status": "failed", "error": err})
     except OSError as e:
         with jobs_lock:
             transfer_jobs[job_id].update(
@@ -459,6 +488,21 @@ class TransferAPIHandler(BaseHTTPRequestHandler):
                 },
             )
 
+        if path == "/api/receiver/check":
+            qs = parse_qs(urlparse(self.path).query)
+            host = qs.get("host", [""])[0].strip()
+            port_raw = qs.get("port", [str(TCP_PORT)])[0].strip()
+            if not host:
+                return _error(self, "Missing host query parameter")
+            try:
+                port = int(port_raw) if port_raw else TCP_PORT
+            except ValueError:
+                return _error(self, "Invalid port")
+            ok, message = _probe_tcp_receiver(host, port)
+            return _json_response(
+                self, {"reachable": ok, "host": host, "port": port, "message": message}
+            )
+
         if path == "/api/files":
             files, directory = _collect_received_files()
             return _json_response(
@@ -551,7 +595,14 @@ class TransferAPIHandler(BaseHTTPRequestHandler):
             if not host:
                 host = "127.0.0.1"
             port_raw = fields.get("port", {}).get("content", b"").decode().strip()
-            port = int(port_raw) if port_raw else TCP_PORT
+            try:
+                port = int(port_raw) if port_raw else TCP_PORT
+            except ValueError:
+                return _error(self, "Invalid port number")
+
+            reachable, probe_msg = _probe_tcp_receiver(host, port)
+            if not reachable:
+                return _error(self, probe_msg, 503)
 
             file_data = fields["file"]["content"]
             safe_name = os.path.basename(fields["file"].get("filename") or "upload.bin")

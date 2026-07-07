@@ -19,8 +19,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from tcp_server import DEFAULT_SAVE_DIR, DEFAULT_PORT as TCP_PORT, run_automated_server
-from udp_server import DEFAULT_PORT as UDP_PORT, run_udp_server
+from tcp_server import (
+    DEFAULT_SAVE_DIR,
+    DEFAULT_PORT as TCP_PORT,
+    get_tcp_bind_error,
+    run_automated_server,
+    stop_tcp_server,
+    wait_tcp_ready,
+)
+from udp_server import (
+    DEFAULT_PORT as UDP_PORT,
+    get_udp_bind_error,
+    run_udp_server,
+    stop_udp_server,
+    wait_udp_ready,
+)
 
 HTTP_HOST = "0.0.0.0"
 HTTP_PORT = 8001
@@ -351,14 +364,37 @@ def _run_udp_server():
         server_running["udp"] = False
 
 
+def _stop_protocol(protocol: str) -> dict:
+    """Stop a TCP or UDP receiver thread and release its port."""
+    protocol = protocol.lower()
+    if protocol == "tcp":
+        stop_tcp_server()
+    else:
+        stop_udp_server()
+
+    thread = server_threads.get(protocol)
+    if thread and thread.is_alive():
+        thread.join(timeout=3.0)
+
+    server_running[protocol] = False
+    server_threads.pop(protocol, None)
+
+    return {
+        "protocol": protocol,
+        "running": False,
+        "message": f"{protocol.upper()} server stopped",
+    }
+
+
 def _start_protocol(protocol: str) -> dict:
-    """Start a TCP or UDP receiver thread. Does not touch tcp_server.py / udp_server.py."""
+    """Start a TCP or UDP receiver thread."""
     protocol = protocol.lower()
     local_ip = get_local_ip()
     port = TCP_PORT if protocol == "tcp" else UDP_PORT
     address = f"{local_ip}:{port}"
 
-    if server_running[protocol]:
+    thread = server_threads.get(protocol)
+    if server_running[protocol] and thread and thread.is_alive():
         return {
             "protocol": protocol,
             "running": True,
@@ -367,13 +403,43 @@ def _start_protocol(protocol: str) -> dict:
             "message": f"{protocol.upper()} server already running at {address}",
         }
 
-    if protocol == "tcp":
-        thread = threading.Thread(target=_run_tcp_server, daemon=True)
-    else:
-        thread = threading.Thread(target=_run_udp_server, daemon=True)
+    if thread and thread.is_alive():
+        _stop_protocol(protocol)
 
+    if protocol == "tcp":
+        target = _run_tcp_server
+        wait_ready = wait_tcp_ready
+        get_bind_error = get_tcp_bind_error
+    else:
+        target = _run_udp_server
+        wait_ready = wait_udp_ready
+        get_bind_error = get_udp_bind_error
+
+    thread = threading.Thread(target=target, daemon=True)
     server_threads[protocol] = thread
     thread.start()
+
+    if not wait_ready(5.0):
+        _stop_protocol(protocol)
+        return {
+            "protocol": protocol,
+            "running": False,
+            "local_ip": local_ip,
+            "address": address,
+            "message": f"{protocol.upper()} server failed to start (timed out)",
+        }
+
+    bind_error = get_bind_error()
+    if bind_error:
+        _stop_protocol(protocol)
+        return {
+            "protocol": protocol,
+            "running": False,
+            "local_ip": local_ip,
+            "address": address,
+            "message": f"{protocol.upper()} server failed to start: {bind_error}",
+        }
+
     server_running[protocol] = True
     return {
         "protocol": protocol,
@@ -535,14 +601,15 @@ class TransferAPIHandler(BaseHTTPRequestHandler):
                         "address": result["address"],
                         "api_running": True,
                     },
+                    status=200 if result["running"] else 409,
                 )
 
-            server_running[protocol] = False
+            result = _stop_protocol(protocol)
             return _json_response(
                 self,
                 {
-                    "message": f"{protocol.upper()} server marked stopped (restart process to fully reset)",
-                    "running": False,
+                    "message": result["message"],
+                    "running": result["running"],
                 },
             )
 

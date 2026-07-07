@@ -86,10 +86,15 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
       setLoading(protocol);
       try {
         const res = await api.startServer(protocol);
-        toast.success(res.message);
+        if (res.running) {
+          toast.success(res.message);
+        } else {
+          toast.error(res.message);
+        }
         onRefresh();
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Failed to start server");
+        onRefresh();
       } finally {
         setLoading(null);
       }
@@ -106,6 +111,7 @@ export function ServerPanel({ status, apiOnline, onRefresh }: ServerPanelProps) 
         onRefresh();
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Failed to stop server");
+        onRefresh();
       } finally {
         setLoading(null);
       }

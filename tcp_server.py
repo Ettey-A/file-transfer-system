@@ -17,6 +17,31 @@ transfer_semaphore = threading.Semaphore(3)
 stats_condition = threading.Condition()
 total_files_received = 0
 
+_shutdown = threading.Event()
+_listen_socket = None
+_ready = threading.Event()
+_bind_error = None
+_monitor_started = False
+
+
+def stop_tcp_server():
+    """Signal the TCP listener to stop and release the port."""
+    _shutdown.set()
+    sock = _listen_socket
+    if sock is not None:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
+def wait_tcp_ready(timeout: float = 5.0) -> bool:
+  return _ready.wait(timeout)
+
+
+def get_tcp_bind_error():
+  return _bind_error
+
 def safe_log(message):
     with log_lock:
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -85,32 +110,56 @@ def handle_client(client_socket, addr):
             client_socket.close()
 
 def run_automated_server():
+    global _listen_socket, _bind_error, _monitor_started
+
+    _shutdown.clear()
+    _ready.clear()
+    _bind_error = None
+
     if not os.path.exists(DEFAULT_SAVE_DIR):
         os.makedirs(DEFAULT_SAVE_DIR)
         safe_log(f"Created directory: {DEFAULT_SAVE_DIR}")
-    
-    threading.Thread(target=monitor_stats, daemon=True).start()
-    
+
+    if not _monitor_started:
+        threading.Thread(target=monitor_stats, daemon=True).start()
+        _monitor_started = True
+
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    
+
     try:
+        _listen_socket = server
         server.bind((DEFAULT_HOST, DEFAULT_PORT))
         server.listen(10)
         safe_log(f"🚀 Server LIVE on {DEFAULT_HOST}:{DEFAULT_PORT}")
         safe_log(f"📁 Saving to: {DEFAULT_SAVE_DIR}")
         safe_log("🔒 Synchronization: Lock + Semaphore(3) + Condition active")
+        _ready.set()
 
-        while True:
-            conn, addr = server.accept()
-            threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
-            
+        server.settimeout(1.0)
+        while not _shutdown.is_set():
+            try:
+                conn, addr = server.accept()
+                threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
+            except socket.timeout:
+                continue
+            except OSError:
+                if _shutdown.is_set():
+                    break
+                raise
+
     except KeyboardInterrupt:
         safe_log("🛑 Server shutting down...")
     except Exception as e:
+        _bind_error = str(e)
         safe_log(f"Server error: {e}")
+        _ready.set()
     finally:
-        server.close()
+        _listen_socket = None
+        try:
+            server.close()
+        except OSError:
+            pass
 
 if __name__ == "__main__":
     safe_log("Starting improved TCP file transfer server...")

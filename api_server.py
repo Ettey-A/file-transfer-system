@@ -27,21 +27,14 @@ from tcp_server import (
     stop_tcp_server,
     wait_tcp_ready,
 )
-from udp_server import (
-    DEFAULT_PORT as UDP_PORT,
-    get_udp_bind_error,
-    run_udp_server,
-    stop_udp_server,
-    wait_udp_ready,
-)
 
 HTTP_HOST = "0.0.0.0"
 HTTP_PORT = 8001
 BUFFER_SIZE = 4096
 STATIC_DIR = Path(__file__).resolve().parent / "frontend" / "dist"
 
-server_threads: dict[str, threading.Thread] = {}
-server_running: dict[str, bool] = {"tcp": False, "udp": False}
+server_thread: threading.Thread | None = None
+server_running = False
 servers_lock = threading.Lock()
 transfer_jobs: dict[str, dict] = {}
 jobs_lock = threading.Lock()
@@ -220,77 +213,6 @@ def _send_file_tcp(job_id: str, host: str, port: int, filepath: str, filename: s
             pass
 
 
-def _send_file_udp(job_id: str, host: str, port: int, filepath: str, filename: str):
-    filesize = os.path.getsize(filepath)
-
-    with jobs_lock:
-        transfer_jobs[job_id].update(
-            {
-                "status": "connecting",
-                "filename": filename,
-                "filesize": filesize,
-                "sent": 0,
-                "progress": 0,
-            }
-        )
-
-    udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        udp_socket.settimeout(TRANSFER_TIMEOUT)
-        header = f"{filename}|{filesize}"
-        udp_socket.sendto(header.encode("utf-8"), (host, port))
-        time.sleep(0.2)
-
-        sent = 0
-        with open(filepath, "rb") as f:
-            while True:
-                chunk = f.read(BUFFER_SIZE)
-                if not chunk:
-                    break
-                udp_socket.sendto(chunk, (host, port))
-                sent += len(chunk)
-                progress = round((sent / filesize) * 100, 1) if filesize else 100
-                with jobs_lock:
-                    transfer_jobs[job_id].update(
-                        {"status": "transferring", "sent": sent, "progress": progress}
-                    )
-
-        with jobs_lock:
-            transfer_jobs[job_id].update(
-                {
-                    "status": "completed",
-                    "sent": sent,
-                    "progress": 100,
-                    "completed_at": datetime.now().isoformat(),
-                }
-            )
-    except socket.timeout:
-        with jobs_lock:
-            transfer_jobs[job_id].update(
-                {
-                    "status": "failed",
-                    "error": f"UDP transfer timed out sending to {host}:{port}.",
-                }
-            )
-    except OSError as e:
-        with jobs_lock:
-            transfer_jobs[job_id].update(
-                {
-                    "status": "failed",
-                    "error": f"Cannot send UDP to {host}:{port}. ({e})",
-                }
-            )
-    except Exception as e:
-        with jobs_lock:
-            transfer_jobs[job_id].update({"status": "failed", "error": str(e)})
-    finally:
-        udp_socket.close()
-        try:
-            os.remove(filepath)
-        except OSError:
-            pass
-
-
 def _is_listable_file(name: str) -> bool:
     """Hide temp upload artifacts from the received-files list."""
     if name.startswith(".") or name.startswith("_"):
@@ -351,119 +273,89 @@ def _session_stats() -> dict:
     }
 
 
-def _protocol_running(protocol: str) -> bool:
-    """Whether this machine's receiver thread is alive for the given protocol."""
-    thread = server_threads.get(protocol)
-    if not thread or not thread.is_alive():
-        server_running[protocol] = False
+def _tcp_running() -> bool:
+    """Whether this machine's TCP receiver thread is alive."""
+    global server_running, server_thread
+    if not server_thread or not server_thread.is_alive():
+        server_running = False
         return False
-    return server_running[protocol]
+    return server_running
 
 
 def _run_tcp_server():
+    global server_running
     try:
         run_automated_server()
     finally:
-        server_running["tcp"] = False
+        server_running = False
 
 
-def _run_udp_server():
-    try:
-        run_udp_server()
-    finally:
-        server_running["udp"] = False
+def _stop_tcp_unlocked() -> None:
+    global server_running, server_thread
+    stop_tcp_server()
+    if server_thread and server_thread.is_alive():
+        server_thread.join(timeout=3.0)
+    server_running = False
+    server_thread = None
 
 
-def _stop_protocol_unlocked(protocol: str) -> None:
-    protocol = protocol.lower()
-    if protocol == "tcp":
-        stop_tcp_server()
-    else:
-        stop_udp_server()
-
-    thread = server_threads.get(protocol)
-    if thread and thread.is_alive():
-        thread.join(timeout=3.0)
-
-    server_running[protocol] = False
-    server_threads.pop(protocol, None)
-
-
-def _stop_protocol(protocol: str) -> dict:
-    """Stop this machine's TCP or UDP receiver and release its port."""
-    protocol = protocol.lower()
+def _stop_tcp() -> dict:
+    """Stop this machine's TCP receiver and release its port."""
     with servers_lock:
-        _stop_protocol_unlocked(protocol)
+        _stop_tcp_unlocked()
 
     return {
-        "protocol": protocol,
         "running": False,
-        "message": f"{protocol.upper()} server stopped on this PC",
+        "message": "TCP server stopped on this PC",
     }
 
 
-def _start_protocol(protocol: str) -> dict:
-    """Start this machine's TCP or UDP receiver (independent of other PCs)."""
-    protocol = protocol.lower()
+def _start_tcp() -> dict:
+    """Start this machine's TCP receiver."""
+    global server_running, server_thread
     local_ip = get_local_ip()
-    port = TCP_PORT if protocol == "tcp" else UDP_PORT
-    address = f"{local_ip}:{port}"
+    address = f"{local_ip}:{TCP_PORT}"
 
     with servers_lock:
-        if _protocol_running(protocol):
+        if _tcp_running():
             return {
-                "protocol": protocol,
                 "running": True,
                 "local_ip": local_ip,
                 "address": address,
-                "message": f"{protocol.upper()} server already running on this PC at {address}",
+                "message": f"TCP server already running on this PC at {address}",
             }
 
-        thread = server_threads.get(protocol)
-        if thread and thread.is_alive():
-            _stop_protocol_unlocked(protocol)
+        if server_thread and server_thread.is_alive():
+            _stop_tcp_unlocked()
 
-        if protocol == "tcp":
-            target = _run_tcp_server
-            wait_ready = wait_tcp_ready
-            get_bind_error = get_tcp_bind_error
-        else:
-            target = _run_udp_server
-            wait_ready = wait_udp_ready
-            get_bind_error = get_udp_bind_error
+        server_thread = threading.Thread(target=_run_tcp_server, daemon=True)
+        server_thread.start()
 
-        thread = threading.Thread(target=target, daemon=True)
-        server_threads[protocol] = thread
-        thread.start()
-
-        if not wait_ready(5.0):
-            _stop_protocol_unlocked(protocol)
+        if not wait_tcp_ready(5.0):
+            _stop_tcp_unlocked()
             return {
-                "protocol": protocol,
                 "running": False,
                 "local_ip": local_ip,
                 "address": address,
-                "message": f"{protocol.upper()} server failed to start on this PC (timed out)",
+                "message": "TCP server failed to start on this PC (timed out)",
             }
 
-        bind_error = get_bind_error()
+        bind_error = get_tcp_bind_error()
         if bind_error:
-            _stop_protocol_unlocked(protocol)
+            _stop_tcp_unlocked()
             return {
-                "protocol": protocol,
                 "running": False,
                 "local_ip": local_ip,
                 "address": address,
-                "message": f"{protocol.upper()} server failed to start on this PC: {bind_error}",
+                "message": f"TCP server failed to start on this PC: {bind_error}",
             }
 
-        server_running[protocol] = True
+        server_running = True
         return {
-            "protocol": protocol,
             "running": True,
             "local_ip": local_ip,
             "address": address,
-            "message": f"{protocol.upper()} server started on this PC at {address}",
+            "message": f"TCP server started on this PC at {address}",
         }
 
 
@@ -527,19 +419,11 @@ class TransferAPIHandler(BaseHTTPRequestHandler):
                 self,
                 {
                     "local_ip": local_ip,
-                    "servers": {
-                        "tcp": {
-                            "running": _protocol_running("tcp"),
-                            "port": TCP_PORT,
-                            "address": f"{local_ip}:{TCP_PORT}",
-                            "save_dir": DEFAULT_SAVE_DIR,
-                        },
-                        "udp": {
-                            "running": _protocol_running("udp"),
-                            "port": UDP_PORT,
-                            "address": f"{local_ip}:{UDP_PORT}",
-                            "save_dir": DEFAULT_SAVE_DIR,
-                        },
+                    "server": {
+                        "running": _tcp_running(),
+                        "port": TCP_PORT,
+                        "address": f"{local_ip}:{TCP_PORT}",
+                        "save_dir": DEFAULT_SAVE_DIR,
                     },
                     "active_transfers": stats["sent_active"],
                     "stats": stats,
@@ -598,17 +482,8 @@ class TransferAPIHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
 
         if path in ("/api/server/start", "/api/server/stop"):
-            try:
-                data = _read_json(self)
-            except json.JSONDecodeError:
-                return _error(self, "Invalid JSON body")
-
-            protocol = str(data.get("protocol", "")).lower()
-            if protocol not in ("tcp", "udp"):
-                return _error(self, "Protocol must be 'tcp' or 'udp'")
-
             if path.endswith("/start"):
-                result = _start_protocol(protocol)
+                result = _start_tcp()
                 return _json_response(
                     self,
                     {
@@ -621,7 +496,7 @@ class TransferAPIHandler(BaseHTTPRequestHandler):
                     status=200 if result["running"] else 409,
                 )
 
-            result = _stop_protocol(protocol)
+            result = _stop_tcp()
             return _json_response(
                 self,
                 {
@@ -643,13 +518,9 @@ class TransferAPIHandler(BaseHTTPRequestHandler):
             if "file" not in fields:
                 return _error(self, "No file uploaded")
 
-            protocol = fields.get("protocol", {}).get("content", b"tcp").decode().lower()
-            if protocol not in ("tcp", "udp"):
-                return _error(self, "Protocol must be 'tcp' or 'udp'")
-
             host = fields.get("host", {}).get("content", b"127.0.0.1").decode()
             port_raw = fields.get("port", {}).get("content", b"").decode().strip()
-            port = int(port_raw) if port_raw else (TCP_PORT if protocol == "tcp" else UDP_PORT)
+            port = int(port_raw) if port_raw else TCP_PORT
 
             file_data = fields["file"]["content"]
             safe_name = os.path.basename(fields["file"].get("filename") or "upload.bin")
@@ -668,7 +539,7 @@ class TransferAPIHandler(BaseHTTPRequestHandler):
                 transfer_jobs[job_id] = {
                     "id": job_id,
                     "status": "queued",
-                    "protocol": protocol,
+                    "protocol": "tcp",
                     "host": host,
                     "port": port,
                     "filename": safe_name,
@@ -678,9 +549,8 @@ class TransferAPIHandler(BaseHTTPRequestHandler):
                     "created_at": datetime.now().isoformat(),
                 }
 
-            target = _send_file_tcp if protocol == "tcp" else _send_file_udp
             threading.Thread(
-                target=target, args=(job_id, host, port, temp_path, safe_name), daemon=True
+                target=_send_file_tcp, args=(job_id, host, port, temp_path, safe_name), daemon=True
             ).start()
 
             return _json_response(self, {"job_id": job_id, "message": "Transfer started"})

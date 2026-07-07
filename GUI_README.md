@@ -1,13 +1,13 @@
 # Transfer System — Web UI
 
-Professional React + Shadcn UI dashboard for the TCP/UDP file transfer backend.
+Professional React + Shadcn UI dashboard for the TCP file transfer backend.
 
 **No pip required.** The API uses only Python's built-in standard library.
 
 ## Architecture
 
 ```
-Browser (port 8001)  →  api_server.py (stdlib HTTP)  →  TCP/UDP sockets
+Browser (port 8001)  →  api_server.py (stdlib HTTP)  →  TCP sockets
 ```
 
 One command starts both the API and the web UI.
@@ -46,6 +46,10 @@ Then restart `python api_server.py`.
 
 > **Note:** `npm` is only needed to *build* the React UI, not to run the app day-to-day.
 
+## Optional: Vercel hosting
+
+See `VERCEL.md`. Each user connects their own PC via ngrok — servers are independent per machine.
+
 ## Optional: Development mode
 
 For live-reload while editing the React code:
@@ -62,15 +66,15 @@ Dev UI: http://localhost:5173 (proxies API to port 8001)
 
 ## Features
 
-- **Receiver panel** — Start/stop TCP (port 9999) and UDP (port 9998) servers
-- **Send files** — Drag-and-drop upload with protocol, IP, and port configuration
+- **Receiver panel** — Start/stop TCP server (port 9999)
+- **Send files** — Drag-and-drop upload with IP and port configuration
 - **Live progress** — Real-time transfer progress bar
 - **Received files** — Browse and download files saved to `~/Downloads/received_files`
 - **Transfer history** — View recent send operations
 
 ## Usage Flow
 
-1. On the **receiver** machine: open the UI → Start TCP or UDP server
+1. On the **receiver** machine: open the UI → Start TCP server
 2. On the **sender** machine: open the UI → select file → enter receiver IP → Send
 3. Received files appear in the Received Files panel
 
@@ -80,11 +84,10 @@ Dev UI: http://localhost:5173 (proxies API to port 8001)
 |------|---------|
 | `api_server.py` | HTTP API + UI server (stdlib only) |
 | `tcp_server.py` | TCP receiver |
-| `udp_server.py` | UDP receiver |
 | `frontend/dist/` | Built React UI (served automatically) |
 
 ## Tech Stack
 
 - **Frontend:** React, TypeScript, Tailwind CSS, Shadcn UI
 - **Backend:** Python `http.server` (no FastAPI, no uvicorn, no pip)
-- **Transfer:** `tcp_server.py`, `udp_server.py`, socket clients
+- **Transfer:** `tcp_server.py`, socket clients

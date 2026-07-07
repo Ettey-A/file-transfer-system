@@ -17,10 +17,7 @@ export interface SessionStats {
 
 export interface SystemStatus {
   local_ip: string;
-  servers: {
-    tcp: ServerInfo;
-    udp: ServerInfo;
-  };
+  server: ServerInfo;
   active_transfers: number;
   stats: SessionStats;
 }
@@ -55,7 +52,11 @@ export interface TransferJob {
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${getApiBase()}${path}`, options);
+  const base = getApiBase();
+  if (!base) {
+    throw new Error("Connect your PC's API URL first — each computer uses its own backend.");
+  }
+  const res = await fetch(`${base}${path}`, options);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || err.message || "Request failed");
@@ -66,7 +67,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export const api = {
   getStatus: () => request<SystemStatus>("/status"),
 
-  startServer: (protocol: "tcp" | "udp") =>
+  startServer: () =>
     request<{
       message: string;
       running: boolean;
@@ -76,14 +77,14 @@ export const api = {
     }>("/server/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ protocol }),
+      body: JSON.stringify({}),
     }),
 
-  stopServer: (protocol: "tcp" | "udp") =>
+  stopServer: () =>
     request<{ message: string; running: boolean }>("/server/stop", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ protocol }),
+      body: JSON.stringify({}),
     }),
 
   listFiles: () =>
@@ -92,12 +93,11 @@ export const api = {
   downloadFile: (filename: string) =>
     `${getApiBase()}/files/download/${encodeURIComponent(filename)}`,
 
-  transferFile: (file: File, host: string, port: number, protocol: "tcp" | "udp") => {
+  transferFile: (file: File, host: string, port: number) => {
     const form = new FormData();
     form.append("file", file);
     form.append("host", host);
     form.append("port", String(port));
-    form.append("protocol", protocol);
     return request<{ job_id: string; message: string }>("/transfer", {
       method: "POST",
       body: form,

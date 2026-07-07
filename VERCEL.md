@@ -1,14 +1,20 @@
-# Deploy to Vercel (same UI + features as local)
+# Deploy to Vercel (multi-user, each PC independent)
 
-## Why Vercel looked different
+## Important: one backend per PC
 
-Locally, `python start.py` runs **both** the UI and the Python API on port 8001.
+Vercel only hosts the **UI**. The TCP server always runs on **your physical PC** via `python start.py`.
 
-Vercel only hosts the **static React UI**. Without the Python backend, API calls fail and features (start servers, send files, received files, history) do not work.
+**Do not use a single shared `BACKEND_URL` for everyone.** If all users pointed at one ngrok URL, they would all see the same server status and think starting/stopping affects every PC.
 
-## Get the exact same experience on Vercel
+Instead, **each person connects their own browser to their own PC**:
 
-### Step 1 — Deploy the UI to Vercel
+1. Run `python start.py` on your machine
+2. Run `ngrok http 8001` on your machine
+3. Open the Vercel app and paste **your** ngrok URL (saved only in your browser)
+
+Starting the server on your PC only starts TCP on **your** machine.
+
+## Deploy the UI
 
 1. Push this repo to GitHub
 2. [vercel.com/new](https://vercel.com/new) → Import project
@@ -16,39 +22,31 @@ Vercel only hosts the **static React UI**. Without the Python backend, API calls
 4. Framework: **Vite** (auto-detected)
 5. Deploy
 
-### Step 2 — Run the Python backend on your PC
+No `BACKEND_URL` environment variable is required.
+
+## Per-user setup (each computer)
+
+On **each PC** that will send or receive files:
 
 ```bash
 python start.py
 ```
 
-### Step 3 — Expose port 8001 to the internet
-
-Install [ngrok](https://ngrok.com) and run:
+In another terminal:
 
 ```bash
 ngrok http 8001
 ```
 
-Copy the HTTPS URL, e.g. `https://abc123.ngrok-free.app`
+Copy the HTTPS URL (e.g. `https://abc123.ngrok-free.app`).
 
-### Step 4 — Connect Vercel to your backend
+In the Vercel-hosted UI:
 
-In Vercel → your project → **Settings** → **Environment Variables**, add:
+1. Paste your ngrok URL in **Connect my PC**
+2. Click **Connect my PC**
+3. The header shows **Your PC: x.x.x.x** — that is the machine you control
 
-| Name | Value | Example |
-|------|-------|---------|
-| `BACKEND_URL` | Your ngrok URL (no trailing slash) | `https://abc123.ngrok-free.app` |
-
-Apply to **Production**, **Preview**, and **Development**.
-
-**Redeploy** the project (Deployments → ⋯ → Redeploy).
-
-### How it works
-
-- Vercel serves the same built UI as local (`index.html` → `entry.tsx` → `App.tsx`)
-- `/api/*` requests are proxied by `frontend/api/[...path].ts` to your `BACKEND_URL`
-- Same endpoints as local: start TCP/UDP, send files, received files, transfer history
+To switch computers, click **Change PC** and enter a different URL.
 
 ## Local development (unchanged)
 
@@ -56,13 +54,13 @@ Apply to **Production**, **Preview**, and **Development**.
 cd frontend && npm run dev
 ```
 
-Vite proxies `/api` to `http://127.0.0.1:8001`.
+Vite proxies `/api` to `http://127.0.0.1:8001` on the same machine.
 
 ## Troubleshooting
 
 | Problem | Fix |
 |---------|-----|
-| API Offline on Vercel | Set `BACKEND_URL` and redeploy |
-| Features missing | Backend must be running + ngrok active |
+| Server starts on "someone else's PC" | You are connected to their ngrok URL — use **Change PC** and paste yours |
+| API Offline on Vercel | Run `python start.py` + ngrok on your PC, then connect your URL |
 | CORS errors | `api_server.py` already allows all origins |
-| Old UI on Vercel | Redeploy after `npm run build` locally to verify |
+| Wrong IP shown in header | Disconnect and reconnect with your ngrok URL |

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { HardDrive, Shield, Zap } from "lucide-react";
+import { HardDrive, Monitor, Shield, Zap } from "lucide-react";
 import { api, type ReceivedFile, type SystemStatus, type TransferJob } from "@/lib/api";
 import { ApiConnection } from "@/components/ApiConnection";
 import { FileUpload } from "@/components/FileUpload";
@@ -7,7 +7,9 @@ import { ReceivedFiles } from "@/components/ReceivedFiles";
 import { ServerPanel } from "@/components/ServerPanel";
 import { TransferHistory } from "@/components/TransferHistory";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { isHostedUI, needsBackendSetup } from "@/lib/config";
 
 export default function App() {
   const [status, setStatus] = useState<SystemStatus | null>(null);
@@ -22,19 +24,29 @@ export default function App() {
   });
   const [receivedCount, setReceivedCount] = useState(0);
   const [filesLoading, setFilesLoading] = useState(false);
-  const [apiOnline, setApiOnline] = useState(true);
+  const [apiOnline, setApiOnline] = useState(false);
+  const [backendReady, setBackendReady] = useState(() => !needsBackendSetup());
+  const [showConnectionPanel, setShowConnectionPanel] = useState(false);
+  const hosted = isHostedUI();
 
   const refreshStatus = useCallback(async () => {
+    if (needsBackendSetup()) {
+      setApiOnline(false);
+      setStatus(null);
+      return;
+    }
     try {
       const data = await api.getStatus();
       setStatus(data);
       setApiOnline(true);
+      setBackendReady(true);
     } catch {
       setApiOnline(false);
     }
   }, []);
 
   const refreshFiles = useCallback(async () => {
+    if (!backendReady) return;
     setFilesLoading(true);
     try {
       const data = await api.listFiles();
@@ -46,9 +58,10 @@ export default function App() {
     } finally {
       setFilesLoading(false);
     }
-  }, []);
+  }, [backendReady]);
 
   const refreshTransfers = useCallback(async () => {
+    if (!backendReady) return;
     try {
       const data = await api.listTransfers();
       setTransfers(data.transfers);
@@ -57,7 +70,7 @@ export default function App() {
     } catch {
       /* ignore */
     }
-  }, []);
+  }, [backendReady]);
 
   const refreshAll = useCallback(() => {
     refreshStatus();
@@ -65,13 +78,28 @@ export default function App() {
     refreshTransfers();
   }, [refreshStatus, refreshFiles, refreshTransfers]);
 
-  useEffect(() => {
+  const handleConnected = useCallback(() => {
+    setBackendReady(true);
+    setShowConnectionPanel(false);
     refreshAll();
-    const receiversActive =
-      status?.servers.tcp.running || status?.servers.udp.running;
-    const interval = setInterval(refreshAll, receiversActive ? 1500 : 3000);
+  }, [refreshAll]);
+
+  const handleDisconnected = useCallback(() => {
+    setBackendReady(false);
+    setApiOnline(false);
+    setStatus(null);
+    setShowConnectionPanel(true);
+  }, []);
+
+  useEffect(() => {
+    if (!backendReady) return;
+    refreshAll();
+    const receiverActive = status?.server.running;
+    const interval = setInterval(refreshAll, receiverActive ? 1500 : 3000);
     return () => clearInterval(interval);
-  }, [refreshAll, status?.servers.tcp.running, status?.servers.udp.running]);
+  }, [refreshAll, status?.server.running, backendReady]);
+
+  const showSetup = !backendReady || showConnectionPanel || (!apiOnline && !needsBackendSetup());
 
   return (
     <div className="min-h-screen">
@@ -83,13 +111,29 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-lg font-bold tracking-tight">Transfer System</h1>
-              <p className="text-xs text-muted-foreground">TCP & UDP File Transfer</p>
+              <p className="text-xs text-muted-foreground">TCP File Transfer</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {hosted && backendReady && status?.local_ip && (
+              <Badge variant="outline" className="gap-1.5 font-mono">
+                <Monitor className="h-3 w-3" />
+                Your PC: {status.local_ip}
+              </Badge>
+            )}
             <Badge variant={apiOnline ? "success" : "destructive"}>
               API {apiOnline ? "Online" : "Offline"}
             </Badge>
+            {hosted && backendReady && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs"
+                onClick={() => setShowConnectionPanel(true)}
+              >
+                Change PC
+              </Button>
+            )}
           </div>
         </div>
       </header>
@@ -110,43 +154,49 @@ export default function App() {
           </div>
         </div>
 
-        {!apiOnline && <ApiConnection onConnected={refreshAll} />}
+        {(showSetup || needsBackendSetup()) && (
+          <ApiConnection
+            onConnected={handleConnected}
+            onDisconnected={handleDisconnected}
+            forceSetup={needsBackendSetup() || showConnectionPanel}
+          />
+        )}
 
-        <Tabs defaultValue="dashboard" className="space-y-6">
-          <TabsList>
-            <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
-            <TabsTrigger value="history">History</TabsTrigger>
-          </TabsList>
+        {backendReady && (
+          <Tabs defaultValue="dashboard" className="space-y-6">
+            <TabsList>
+              <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
+              <TabsTrigger value="history">History</TabsTrigger>
+            </TabsList>
 
-          <TabsContent value="dashboard" className="space-y-6">
-            <div className="grid gap-6 lg:grid-cols-2">
-              <div className="space-y-6">
-                <ServerPanel status={status} apiOnline={apiOnline} onRefresh={refreshStatus} />
-                <ReceivedFiles
-                  files={files}
-                  directory={directory}
-                  onRefresh={refreshFiles}
-                  loading={filesLoading}
+            <TabsContent value="dashboard" className="space-y-6">
+              <div className="grid gap-6 lg:grid-cols-2">
+                <div className="space-y-6">
+                  <ServerPanel status={status} apiOnline={apiOnline} onRefresh={refreshStatus} />
+                  <ReceivedFiles
+                    files={files}
+                    directory={directory}
+                    onRefresh={refreshFiles}
+                    loading={filesLoading}
+                  />
+                </div>
+                <FileUpload
+                  localIp={status?.local_ip}
+                  serverRunning={status?.server.running}
+                  onTransferComplete={refreshAll}
                 />
               </div>
-              <FileUpload
-                localIp={status?.local_ip}
-                serversRunning={
-                  status?.servers.tcp.running || status?.servers.udp.running
-                }
-                onTransferComplete={refreshAll}
-              />
-            </div>
-          </TabsContent>
+            </TabsContent>
 
-          <TabsContent value="history">
-            <TransferHistory
-              transfers={transfers}
-              stats={transferStats}
-              receivedCount={receivedCount}
-            />
-          </TabsContent>
-        </Tabs>
+            <TabsContent value="history">
+              <TransferHistory
+                transfers={transfers}
+                stats={transferStats}
+                receivedCount={receivedCount}
+              />
+            </TabsContent>
+          </Tabs>
+        )}
       </main>
 
       <footer className="border-t py-6 text-center text-xs text-muted-foreground">

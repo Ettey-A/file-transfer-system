@@ -8,38 +8,24 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 
 interface FileUploadProps {
   localIp?: string;
-  serversRunning?: boolean;
+  serverRunning?: boolean;
   onTransferComplete: () => void;
 }
 
-export function FileUpload({ localIp, serversRunning, onTransferComplete }: FileUploadProps) {
+export function FileUpload({ localIp, serverRunning, onTransferComplete }: FileUploadProps) {
   const [file, setFile] = useState<File | null>(null);
   const [host, setHost] = useState("127.0.0.1");
   const [port, setPort] = useState("9999");
-  const [protocol, setProtocol] = useState<"tcp" | "udp">("tcp");
   const [uploading, setUploading] = useState(false);
   const [activeJob, setActiveJob] = useState<TransferJob | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollStartedRef = useRef<number>(0);
-
-  const handleProtocolChange = (value: string) => {
-    const p = value as "tcp" | "udp";
-    setProtocol(p);
-    setPort(p === "tcp" ? "9999" : "9998");
-  };
 
   const pollJob = useCallback(
     (jobId: string) => {
@@ -51,7 +37,7 @@ export function FileUpload({ localIp, serversRunning, onTransferComplete }: File
           if (pollRef.current) clearInterval(pollRef.current);
           setUploading(false);
           setActiveJob(null);
-          toast.error("Transfer timed out. Check receiver IP and that TCP/UDP server is started.");
+          toast.error("Transfer timed out. Check receiver IP and that the TCP server is started.");
           return;
         }
 
@@ -95,16 +81,16 @@ export function FileUpload({ localIp, serversRunning, onTransferComplete }: File
       return;
     }
 
-    if (serversRunning === false) {
+    if (serverRunning === false) {
       toast.warning(
-        "No local receiver is running. Start TCP/UDP here only if this PC should receive the file."
+        "No local receiver is running. Start TCP here only if this PC should receive the file."
       );
     }
 
     setUploading(true);
     try {
       const targetHost = host.trim() || "127.0.0.1";
-      const { job_id } = await api.transferFile(file, targetHost, portNum, protocol);
+      const { job_id } = await api.transferFile(file, targetHost, portNum);
       toast.info(`Transfer started: ${file.name}`);
       pollJob(job_id);
     } catch (e) {
@@ -129,7 +115,7 @@ export function FileUpload({ localIp, serversRunning, onTransferComplete }: File
           </div>
           <div>
             <CardTitle>Send File</CardTitle>
-            <CardDescription>Upload and transfer a file to a remote receiver</CardDescription>
+            <CardDescription>Transfer a file over TCP to a remote receiver</CardDescription>
           </div>
         </div>
       </CardHeader>
@@ -190,19 +176,7 @@ export function FileUpload({ localIp, serversRunning, onTransferComplete }: File
           )}
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-3">
-          <div className="space-y-2">
-            <Label htmlFor="protocol">Protocol</Label>
-            <Select value={protocol} onValueChange={handleProtocolChange} disabled={uploading}>
-              <SelectTrigger id="protocol">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="tcp">TCP (Reliable)</SelectItem>
-                <SelectItem value="udp">UDP (Fast)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+        <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
             <Label htmlFor="host">Receiver IP</Label>
             <Input
@@ -250,9 +224,9 @@ export function FileUpload({ localIp, serversRunning, onTransferComplete }: File
           </div>
         )}
 
-        {serversRunning === false && (
+        {serverRunning === false && (
           <p className="text-xs text-muted-foreground">
-            Sending to another PC? Enter its IP and start TCP/UDP on that machine first.
+            Sending to another PC? Enter its IP and start TCP on that machine first.
           </p>
         )}
 

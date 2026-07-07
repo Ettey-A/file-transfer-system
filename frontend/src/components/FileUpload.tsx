@@ -1,44 +1,27 @@
-// Send File panel — CLIENT role (user types destination IP; separate from server IP)
-import { useCallback, useEffect, useRef, useState } from "react";
-import { CloudUpload, File, Send, X } from "lucide-react";
+// Upload file to the central server — visible to all connected clients
+import { useCallback, useRef, useState } from "react";
+import { CloudUpload, File, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, type TransferJob } from "@/lib/api";
-import { isHostedUI, usesHostedProxy } from "@/lib/config";
-import { getClientReceiverIp, setClientReceiverIp } from "@/lib/networkConfig";
 import { formatBytes } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 
 interface FileUploadProps {
-  serverRunning?: boolean;
-  detectedIp?: string;
   onTransferComplete: () => void;
 }
 
-export function FileUpload({ serverRunning, detectedIp, onTransferComplete }: FileUploadProps) {
+export function FileUpload({ onTransferComplete }: FileUploadProps) {
   const [file, setFile] = useState<File | null>(null);
-  const [receiverIp, setReceiverIpState] = useState(() => getClientReceiverIp()); // Destination IP (localStorage)
-  const [port, setPort] = useState("9999");
   const [uploading, setUploading] = useState(false);
   const [activeJob, setActiveJob] = useState<TransferJob | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [testingConnection, setTestingConnection] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollStartedRef = useRef<number>(0);
 
-  // Save client receiver IP as user types
-  useEffect(() => {
-    setClientReceiverIp(receiverIp);
-  }, [receiverIp]);
-
-  const hosted = isHostedUI() || usesHostedProxy();
-
-  // Poll GET /api/transfer/{id} every 500ms until done or 120s timeout
   const pollJob = useCallback(
     (jobId: string) => {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -49,7 +32,7 @@ export function FileUpload({ serverRunning, detectedIp, onTransferComplete }: Fi
           if (pollRef.current) clearInterval(pollRef.current);
           setUploading(false);
           setActiveJob(null);
-          toast.error("Transfer timed out. Check receiver IP and that the TCP server is started.");
+          toast.error("Upload timed out. Check your connection to the central server.");
           return;
         }
 
@@ -60,88 +43,41 @@ export function FileUpload({ serverRunning, detectedIp, onTransferComplete }: Fi
           if (job.status === "completed") {
             if (pollRef.current) clearInterval(pollRef.current);
             setUploading(false);
-            toast.success(`Sent ${job.filename} successfully`);
+            toast.success(`${job.filename} uploaded — available to all clients`);
             setFile(null);
             setActiveJob(null);
             onTransferComplete();
           } else if (job.status === "failed") {
             if (pollRef.current) clearInterval(pollRef.current);
             setUploading(false);
-            toast.error(job.error || "Transfer failed");
+            toast.error(job.error || "Upload failed");
             setActiveJob(null);
           }
         } catch {
           if (pollRef.current) clearInterval(pollRef.current);
           setUploading(false);
           setActiveJob(null);
-          toast.error("Lost connection to API while tracking transfer");
+          toast.error("Lost connection to server while tracking upload");
         }
       }, 500);
     },
     [onTransferComplete]
   );
 
-  const handleTestConnection = async () => {
-    const targetHost = receiverIp.trim();
-    if (!targetHost) {
-      toast.error("Enter the receiver IP first");
-      return;
-    }
-
-    const portNum = parseInt(port, 10);
-    if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
-      toast.error("Invalid port number");
-      return;
-    }
-
-    setTestingConnection(true);
-    try {
-      const result = await api.checkReceiver(targetHost, portNum);
-      if (result.reachable) {
-        toast.success(result.message);
-      } else {
-        toast.error(result.message);
-      }
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Connection test failed");
-    } finally {
-      setTestingConnection(false);
-    }
-  };
-
-  const handleSend = async () => {
+  const handleUpload = async () => {
     if (!file) {
       toast.error("Please select a file first");
       return;
     }
 
-    const targetHost = receiverIp.trim();
-    if (!targetHost) {
-      toast.error("Enter the receiver IP address you are sending to");
-      return;
-    }
-
-    const portNum = parseInt(port, 10);
-    if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
-      toast.error("Invalid port number");
-      return;
-    }
-
-    if (serverRunning === false) {
-      toast.warning(
-        "No local receiver is running. Only relevant if this PC should receive the file."
-      );
-    }
-
     setUploading(true);
     try {
-      // POST /api/transfer — backend sends file via TCP to targetHost:portNum
-      const { job_id } = await api.transferFile(file, targetHost, portNum);
-      toast.info(`Transfer started: ${file.name} → ${targetHost}:${portNum}`);
+      const { job_id } = await api.uploadFile(file);
+      toast.info(`Uploading ${file.name} to central server...`);
       pollJob(job_id);
     } catch (e) {
       setUploading(false);
-      toast.error(e instanceof Error ? e.message : "Failed to start transfer");
+      toast.error(e instanceof Error ? e.message : "Failed to start upload");
     }
   };
 
@@ -157,12 +93,12 @@ export function FileUpload({ serverRunning, detectedIp, onTransferComplete }: Fi
       <CardHeader>
         <div className="flex items-center gap-2">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-            <Send className="h-5 w-5" />
+            <Upload className="h-5 w-5" />
           </div>
           <div>
-            <CardTitle>Send File</CardTitle>
+            <CardTitle>Upload File</CardTitle>
             <CardDescription>
-              Enter the remote receiver IP — separate from your server IP above
+              Send a file to the central server — other clients can download it
             </CardDescription>
           </div>
         </div>
@@ -224,62 +160,6 @@ export function FileUpload({ serverRunning, detectedIp, onTransferComplete }: Fi
           )}
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label htmlFor="receiver-ip">Receiver IP (client — where to send)</Label>
-            <div className="flex gap-2">
-              <Input
-                id="receiver-ip"
-                value={receiverIp}
-                onChange={(e) => setReceiverIpState(e.target.value)}
-                placeholder="e.g. 192.168.1.100 or 127.0.0.1"
-                disabled={uploading}
-                className="font-mono"
-              />
-              {detectedIp && detectedIp !== receiverIp.trim() && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="shrink-0"
-                  disabled={uploading}
-                  onClick={() => setReceiverIpState(detectedIp)}
-                >
-                  Use detected
-                </Button>
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {hosted
-                ? "Hosted: use 127.0.0.1 if TCP Receiver runs on the same PC as the API server (ngrok host). Otherwise use that PC's LAN IP."
-                : "IP of the PC that will receive the file. On that PC, click Start in TCP Receiver first."}
-            </p>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="port">Receiver port</Label>
-            <div className="flex gap-2">
-              <Input
-                id="port"
-                value={port}
-                onChange={(e) => setPort(e.target.value)}
-                placeholder="9999"
-                disabled={uploading}
-                className="font-mono"
-              />
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="shrink-0"
-                disabled={uploading || testingConnection || !receiverIp.trim()}
-                onClick={handleTestConnection}
-              >
-                {testingConnection ? "Testing..." : "Test"}
-              </Button>
-            </div>
-          </div>
-        </div>
-
         {activeJob && (
           <div className="space-y-2 rounded-lg border bg-muted/30 p-4">
             <div className="flex items-center justify-between text-sm">
@@ -295,14 +175,9 @@ export function FileUpload({ serverRunning, detectedIp, onTransferComplete }: Fi
           </div>
         )}
 
-        <Button
-          onClick={handleSend}
-          disabled={!file || uploading || !receiverIp.trim()}
-          className="w-full gap-2"
-          size="lg"
-        >
-          <Send className="h-4 w-4" />
-          {uploading ? "Transferring..." : "Send File"}
+        <Button onClick={handleUpload} disabled={!file || uploading} className="w-full gap-2" size="lg">
+          <Upload className="h-4 w-4" />
+          {uploading ? "Uploading..." : "Upload to Server"}
         </Button>
       </CardContent>
     </Card>

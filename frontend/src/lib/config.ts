@@ -1,9 +1,9 @@
-// Key for per-browser backend URL when bypassing the Vercel proxy
+// Key for central server URL saved in this browser
 const STORAGE_KEY = "transfer_api_url";
 
 /** Ensure URL ends with /api for fetch() paths like /status, /transfer. */
 export function normalizeApiBase(url: string): string {
-  const trimmed = url.trim().replace(/\/$/, "");
+  const trimmed = url.trim().replace(/\/$/, ""); // Remove trailing slash
   if (!trimmed) return "";
   if (trimmed.endsWith("/api")) return trimmed;
   return `${trimmed}/api`;
@@ -11,7 +11,7 @@ export function normalizeApiBase(url: string): string {
 
 /** True when UI is hosted on Vercel (not local python or vite dev). */
 export function isHostedUI(): boolean {
-  if (import.meta.env.DEV) return false;
+  if (import.meta.env.DEV) return false; // npm run dev = local
   if (typeof window === "undefined") return false;
   return (
     window.location.hostname.endsWith(".vercel.app") ||
@@ -20,23 +20,17 @@ export function isHostedUI(): boolean {
   );
 }
 
-/** Direct ngrok URL saved in this browser (bypasses Vercel /api proxy). */
+/** Saved central server URL, or null if not set. */
 export function getPersonalBackendUrl(): string | null {
   if (typeof window === "undefined") return null;
   const stored = localStorage.getItem(STORAGE_KEY)?.trim();
   return stored ? normalizeApiBase(stored) : null;
 }
 
-/** Hosted UI using same-origin /api proxy instead of a direct ngrok URL. */
-export function usesHostedProxy(): boolean {
-  return isHostedUI() && !getPersonalBackendUrl();
-}
-
 /** On Vercel without proxy env and no saved URL, user must connect manually. */
 export function needsBackendSetup(): boolean {
   if (!isHostedUI()) return false;
   if (getPersonalBackendUrl()) return false;
-  // Shared hosted deploy: VITE_API_URL means Vercel proxy is configured at build time
   if (import.meta.env.VITE_API_URL) return false;
   return true;
 }
@@ -44,20 +38,13 @@ export function needsBackendSetup(): boolean {
 /** Base URL for all api.* fetch calls. */
 export function getApiBase(): string {
   const personal = getPersonalBackendUrl();
-  if (personal) return personal;
+  if (personal) return personal; // Remote central server (e.g. ngrok)
 
-  if (import.meta.env.DEV) return "/api";
+  if (import.meta.env.DEV) return "/api"; // Vite proxy → localhost:8001
 
-  if (!isHostedUI()) return "/api";
+  if (!isHostedUI()) return "/api"; // python start.py serves UI + API same origin
 
-  // Hosted: same-origin proxy → Vercel api/[...path].ts → BACKEND_URL
-  return "/api";
-}
-
-/** True when API calls go directly to ngrok (needs skip-browser-warning header). */
-export function usesDirectNgrok(): boolean {
-  const base = getApiBase();
-  return base.startsWith("http") && base.includes("ngrok");
+  return "/api"; // Hosted: Vercel api/[...path].ts → BACKEND_URL
 }
 
 export function setApiBase(url: string): void {

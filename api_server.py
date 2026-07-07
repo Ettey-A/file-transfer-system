@@ -1,89 +1,49 @@
 """
-HTTP API + web UI server (port 8001).
+HTTP API + web UI server (port 8001) — centralized file server.
 
 Flow:
-  Browser → GET/POST /api/*  → JSON (status, start server, upload file, etc.)
+  Browser → GET/POST /api/*  → JSON (status, upload file, list/download)
   Browser → other paths      → React app from frontend/dist
-  Upload  → background thread → TCP send to user-entered host:port
-  Start   → background thread → tcp_server.py listens on port 9999
+  Upload  → saved to shared storage on THIS server
+  All clients connected to the same server URL see and download the same files
 """
 
 import json          # JSON API responses
 import mimetypes     # Guess Content-Type for static files
-import os            # Files, paths, remove temp uploads
-import re            # Parse multipart boundaries, filter temp filenames
-import socket        # TCP client for sending files; detect local IP
-import threading     # TCP server thread + send threads + locks
-import time          # Pause after header; timeouts
-import uuid          # Unique job IDs for transfer tracking
+import os            # Files, paths
+import re            # Parse multipart boundaries
+import socket        # Detect local IP
+import threading     # Upload threads + locks
+import uuid          # Unique job IDs and stored filenames
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import unquote, urlparse
 
-from tcp_server import (
-    DEFAULT_SAVE_DIR,       # ~/Downloads/received_files
-    DEFAULT_PORT as TCP_PORT,  # 9999
-    get_tcp_bind_error,     # Error if port bind failed
-    run_automated_server,   # TCP receiver main loop
-    stop_tcp_server,        # Close listener on Stop button
-    wait_tcp_ready,         # Wait until bind succeeds
-)
+from tcp_server import DEFAULT_SAVE_DIR  # Shared storage: ~/Downloads/received_files
 
 # --- HTTP server settings ---
 HTTP_HOST = "0.0.0.0"   # Listen on all interfaces
 HTTP_PORT = 8001        # Web UI + API port
-BUFFER_SIZE = 4096      # Chunk size when sending files
+BUFFER_SIZE = 4096      # Chunk size when writing uploads
 STATIC_DIR = Path(__file__).resolve().parent / "frontend" / "dist"  # Built React app
 
-# --- TCP receiver on THIS PC (one thread) ---
-server_thread: threading.Thread | None = None
-server_running = False
-servers_lock = threading.Lock()  # Prevent race between start/stop
-
-# --- Outbound send jobs (UI polls GET /api/transfer/{id}) ---
+# --- Upload jobs (UI polls GET /api/transfer/{id}) ---
 transfer_jobs: dict[str, dict] = {}
 jobs_lock = threading.Lock()
 
 
 def get_local_ip() -> str:
-    """Detect primary LAN IP (route used to reach the internet)."""
+    """Detect LAN IP hint for UI (users still type server/client IPs separately)."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))  # No data sent; kernel picks route
             return s.getsockname()[0]
     except OSError:
-        pass
-
-    for ip in get_all_local_ips():
-        if not ip.startswith("127."):
-            return ip
-    return "127.0.0.1"
-
-
-def get_all_local_ips() -> list[str]:
-    """Collect non-loopback IPv4 addresses on this PC."""
-    found: list[str] = []
-
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 80))
-            primary = s.getsockname()[0]
-            if not primary.startswith("127."):
-                found.append(primary)
-    except OSError:
-        pass
-
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            ip = info[4][0]
-            if ip.startswith("127.") or ip in found:
-                continue
-            found.append(ip)
-    except OSError:
-        pass
-
-    return found or ["127.0.0.1"]
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except OSError:
+            return "127.0.0.1"
 
 
 def _json_response(handler: BaseHTTPRequestHandler, data: dict, status: int = 200):
@@ -107,8 +67,7 @@ def _send_cors(handler: BaseHTTPRequestHandler):
     handler.send_header("Access-Control-Allow-Origin", "*")
     handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
     handler.send_header(
-        "Access-Control-Allow-Headers",
-        "Content-Type, ngrok-skip-browser-warning, Accept, Authorization",
+        "Access-Control-Allow-Headers", "Content-Type, ngrok-skip-browser-warning"
     )
 
 
@@ -177,154 +136,110 @@ def _parse_multipart(content_type: str, body: bytes) -> dict[str, dict]:
     return fields
 
 
-CONNECT_TIMEOUT = 10    # Seconds to establish TCP connection to receiver
-TRANSFER_TIMEOUT = 120  # Seconds for full file send after connected
-PROBE_TIMEOUT = 5       # Quick check before starting a transfer
+CONNECT_TIMEOUT = 10    # Reserved for legacy compatibility
+TRANSFER_TIMEOUT = 120  # Max seconds for large upload writes
 
 
-def _probe_tcp_receiver(host: str, port: int, timeout: float = PROBE_TIMEOUT) -> tuple[bool, str]:
-    """Verify the TCP receiver is listening before starting a file send."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        sock.settimeout(timeout)
-        sock.connect((host, port))
-        return True, f"TCP receiver reachable at {host}:{port}"
-    except socket.timeout:
-        return False, (
-            f"No response from {host}:{port} within {int(timeout)} seconds. "
-            f"On the receiver PC ({host}): open the dashboard, click Start on TCP Receiver, "
-            f"and allow port {port} through the firewall."
-        )
-    except ConnectionRefusedError:
-        return False, (
-            f"Connection refused at {host}:{port}. "
-            "TCP receiver is not running on that PC — click Start in the TCP Receiver panel."
-        )
-    except OSError as e:
-        return False, f"Cannot reach {host}:{port}: {e}"
-    finally:
-        sock.close()
+def _stored_display_name(stored_name: str) -> str:
+    """Strip upload prefix (8 hex chars + _) to show original filename."""
+    match = re.match(r"^[0-9a-f]{8}_(.+)$", stored_name, re.IGNORECASE)
+    return match.group(1) if match else stored_name
 
 
-def _send_file_tcp(job_id: str, host: str, port: int, filepath: str, filename: str):
+def _unique_stored_name(original: str) -> str:
+    """Return a collision-safe filename for shared server storage."""
+    safe = os.path.basename(original) or "upload.bin"
+    return f"{uuid.uuid4().hex[:8]}_{safe}"
+
+
+def _store_upload(job_id: str, stored_path: str, file_data: bytes, display_name: str):
     """
-    Background worker: connect to receiver and send one file.
+    Background worker: write uploaded bytes to shared server storage.
     Updates transfer_jobs[job_id] for UI progress polling.
     """
-    filesize = os.path.getsize(filepath)
+    filesize = len(file_data)
 
     with jobs_lock:
         transfer_jobs[job_id].update(
             {
-                "status": "connecting",
-                "filename": filename,
+                "status": "uploading",
+                "filename": display_name,
+                "stored_name": os.path.basename(stored_path),
                 "filesize": filesize,
                 "sent": 0,
                 "progress": 0,
             }
         )
 
-    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    connected = False
     try:
-        client.settimeout(CONNECT_TIMEOUT)
-        client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        client.connect((host, port))  # User-entered receiver IP from send panel
-        connected = True
-        client.settimeout(TRANSFER_TIMEOUT)
-
-        header = f"{filename}|{filesize}"
-        client.sendall(header.encode("utf-8"))
-        time.sleep(0.15)  # Let receiver parse header
-
-        sent = 0
-        with open(filepath, "rb") as f:
-            while True:
-                chunk = f.read(BUFFER_SIZE)
-                if not chunk:
-                    break
-                client.sendall(chunk)
-                sent += len(chunk)
-                progress = round((sent / filesize) * 100, 1) if filesize else 100
+        written = 0
+        with open(stored_path, "wb") as f:
+            while written < filesize:
+                chunk = file_data[written : written + BUFFER_SIZE]
+                f.write(chunk)
+                written += len(chunk)
+                progress = round((written / filesize) * 100, 1) if filesize else 100
                 with jobs_lock:
                     transfer_jobs[job_id].update(
-                        {"status": "transferring", "sent": sent, "progress": progress}
+                        {"status": "uploading", "sent": written, "progress": progress}
                     )
 
         with jobs_lock:
             transfer_jobs[job_id].update(
                 {
                     "status": "completed",
-                    "sent": sent,
+                    "sent": written,
                     "progress": 100,
                     "completed_at": datetime.now().isoformat(),
                 }
             )
-    except socket.timeout:
-        if not connected:
-            err = (
-                f"Timed out connecting to {host}:{port}. "
-                "Start the TCP receiver on that PC and verify the IP and firewall."
-            )
-        else:
-            err = f"Transfer to {host}:{port} stalled while sending data. Try again."
-        with jobs_lock:
-            transfer_jobs[job_id].update({"status": "failed", "error": err})
     except OSError as e:
         with jobs_lock:
             transfer_jobs[job_id].update(
                 {
                     "status": "failed",
-                    "error": f"Cannot reach {host}:{port} — start the TCP receiver first. ({e})",
+                    "error": f"Failed to save file on server: {e}",
                 }
             )
+        try:
+            os.remove(stored_path)
+        except OSError:
+            pass
     except Exception as e:
         with jobs_lock:
             transfer_jobs[job_id].update({"status": "failed", "error": str(e)})
-    finally:
-        client.close()
-        try:
-            os.remove(filepath)  # Delete temp upload copy
-        except OSError:
-            pass
 
 
 def _is_listable_file(name: str) -> bool:
-    """Skip hidden files and temp upload artifacts in received-files list."""
-    if name.startswith(".") or name.startswith("_"):
-        return False
-    if re.match(
-        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_",
-        name,
-        re.IGNORECASE,
-    ):
-        return False
-    return True
+    """Skip hidden files and temp artifacts in shared-files list."""
+    return not (name.startswith(".") or name.startswith("_"))
 
 
 def _collect_received_files() -> tuple[list[dict], str]:
-    """Scan DEFAULT_SAVE_DIR for files tcp_server saved."""
+    """Scan shared storage for files all connected clients can access."""
     save_path = Path(DEFAULT_SAVE_DIR)
     if not save_path.exists():
         return [], str(save_path)
 
     files = []
     for entry in sorted(save_path.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
-        if entry.is_file() and _is_listable_file(entry.name):
-            stat = entry.stat()
-            files.append(
-                {
-                    "name": entry.name,
-                    "size": stat.st_size,
-                    "size_formatted": _format_size(stat.st_size),
-                    "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                }
-            )
+        if not entry.is_file() or not _is_listable_file(entry.name):
+            continue
+        stat = entry.stat()
+        files.append(
+            {
+                "name": entry.name,
+                "display_name": _stored_display_name(entry.name),
+                "size": stat.st_size,
+                "size_formatted": _format_size(stat.st_size),
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            }
+        )
     return files, str(save_path)
 
 
 def _transfer_stats() -> dict:
-    """Count send jobs by status for history panel."""
+    """Count upload jobs by status for history panel."""
     with jobs_lock:
         jobs = list(transfer_jobs.values())
     return {
@@ -334,13 +249,13 @@ def _transfer_stats() -> dict:
         "active": sum(
             1
             for j in jobs
-            if j.get("status") in ("queued", "connecting", "transferring")
+            if j.get("status") in ("queued", "uploading")
         ),
     }
 
 
 def _session_stats() -> dict:
-    """Combined sent + received counts for dashboard."""
+    """Combined upload + shared file counts for dashboard."""
     received_files, _ = _collect_received_files()
     sent = _transfer_stats()
     return {
@@ -350,97 +265,6 @@ def _session_stats() -> dict:
         "sent_active": sent["active"],
         "received_total": len(received_files),
     }
-
-
-def _tcp_running() -> bool:
-    """True if TCP receiver thread is alive on this PC."""
-    global server_running, server_thread
-    if not server_thread or not server_thread.is_alive():
-        server_running = False
-        return False
-    return server_running
-
-
-def _run_tcp_server():
-    """Thread target: runs tcp_server accept loop until stopped."""
-    global server_running
-    try:
-        run_automated_server()
-    finally:
-        server_running = False
-
-
-def _stop_tcp_unlocked() -> None:
-    """Stop TCP server (caller must hold servers_lock)."""
-    global server_running, server_thread
-    stop_tcp_server()
-    if server_thread and server_thread.is_alive():
-        server_thread.join(timeout=3.0)
-    server_running = False
-    server_thread = None
-
-
-def _stop_tcp() -> dict:
-    """API: stop TCP receiver on this PC only."""
-    with servers_lock:
-        _stop_tcp_unlocked()
-
-    return {
-        "running": False,
-        "message": "TCP server stopped on this PC",
-    }
-
-
-def _tcp_start_payload(running: bool, local_ip: str, address: str, message: str) -> dict:
-    """Shared fields returned when starting or querying the TCP receiver."""
-    return {
-        "running": running,
-        "local_ip": local_ip,
-        "detected_ip": local_ip,
-        "detected_ips": get_all_local_ips(),
-        "address": address,
-        "message": message,
-    }
-
-
-def _start_tcp() -> dict:
-    """API: start TCP receiver thread on this PC only."""
-    global server_running, server_thread
-    local_ip = get_local_ip()
-    address = f"{local_ip}:{TCP_PORT}"
-
-    with servers_lock:
-        if _tcp_running():
-            return _tcp_start_payload(
-                True, local_ip, address, f"TCP server already running on this PC at {address}"
-            )
-
-        if server_thread and server_thread.is_alive():
-            _stop_tcp_unlocked()
-
-        server_thread = threading.Thread(target=_run_tcp_server, daemon=True)
-        server_thread.start()
-
-        if not wait_tcp_ready(5.0):
-            _stop_tcp_unlocked()
-            return _tcp_start_payload(
-                False, local_ip, address, "TCP server failed to start on this PC (timed out)"
-            )
-
-        bind_error = get_tcp_bind_error()
-        if bind_error:
-            _stop_tcp_unlocked()
-            return _tcp_start_payload(
-                False,
-                local_ip,
-                address,
-                f"TCP server failed to start on this PC: {bind_error}",
-            )
-
-        server_running = True
-        return _tcp_start_payload(
-            True, local_ip, address, f"TCP server started on this PC at {address}"
-        )
 
 
 def _serve_static(handler: BaseHTTPRequestHandler, rel_path: str):
@@ -502,38 +326,21 @@ class TransferAPIHandler(BaseHTTPRequestHandler):
 
         if path == "/api/status":
             detected_ip = get_local_ip()
-            detected_ips = get_all_local_ips()
             stats = _session_stats()
             return _json_response(
                 self,
                 {
                     "local_ip": detected_ip,
                     "detected_ip": detected_ip,
-                    "detected_ips": detected_ips,
                     "server": {
-                        "running": _tcp_running(),
-                        "port": TCP_PORT,
-                        "address": f"{detected_ip}:{TCP_PORT}",
+                        "running": True,
+                        "port": HTTP_PORT,
+                        "address": f"http://{detected_ip}:{HTTP_PORT}",
                         "save_dir": DEFAULT_SAVE_DIR,
                     },
                     "active_transfers": stats["sent_active"],
                     "stats": stats,
                 },
-            )
-
-        if path == "/api/receiver/check":
-            qs = parse_qs(urlparse(self.path).query)
-            host = qs.get("host", [""])[0].strip()
-            port_raw = qs.get("port", [str(TCP_PORT)])[0].strip()
-            if not host:
-                return _error(self, "Missing host query parameter")
-            try:
-                port = int(port_raw) if port_raw else TCP_PORT
-            except ValueError:
-                return _error(self, "Invalid port")
-            ok, message = _probe_tcp_receiver(host, port)
-            return _json_response(
-                self, {"reachable": ok, "host": host, "port": port, "message": message}
             )
 
         if path == "/api/files":
@@ -551,7 +358,7 @@ class TransferAPIHandler(BaseHTTPRequestHandler):
             data = Path(filepath).read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Disposition", f'attachment; filename="{_stored_display_name(filename)}"')
             self.send_header("Content-Length", str(len(data)))
             _send_cors(self)
             self.end_headers()
@@ -588,28 +395,15 @@ class TransferAPIHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
 
         if path in ("/api/server/start", "/api/server/stop"):
-            if path.endswith("/start"):
-                result = _start_tcp()
-                return _json_response(
-                    self,
-                    {
-                        "message": result["message"],
-                        "running": result["running"],
-                        "local_ip": result["local_ip"],
-                        "detected_ip": result.get("detected_ip", result["local_ip"]),
-                        "detected_ips": result.get("detected_ips", []),
-                        "address": result["address"],
-                        "api_running": True,
-                    },
-                    status=200 if result["running"] else 409,
-                )
-
-            result = _stop_tcp()
+            detected_ip = get_local_ip()
             return _json_response(
                 self,
                 {
-                    "message": result["message"],
-                    "running": result["running"],
+                    "message": "Central server is always running with python start.py — no separate start needed.",
+                    "running": True,
+                    "local_ip": detected_ip,
+                    "address": f"http://{detected_ip}:{HTTP_PORT}",
+                    "api_running": True,
                 },
             )
 
@@ -626,40 +420,24 @@ class TransferAPIHandler(BaseHTTPRequestHandler):
             if "file" not in fields:
                 return _error(self, "No file uploaded")
 
-            host = fields.get("host", {}).get("content", b"127.0.0.1").decode().strip()
-            if not host:
-                host = "127.0.0.1"
-            port_raw = fields.get("port", {}).get("content", b"").decode().strip()
-            try:
-                port = int(port_raw) if port_raw else TCP_PORT
-            except ValueError:
-                return _error(self, "Invalid port number")
-
-            reachable, probe_msg = _probe_tcp_receiver(host, port)
-            if not reachable:
-                return _error(self, probe_msg, 503)
-
             file_data = fields["file"]["content"]
-            safe_name = os.path.basename(fields["file"].get("filename") or "upload.bin")
+            display_name = os.path.basename(fields["file"].get("filename") or "upload.bin")
+            stored_name = _unique_stored_name(display_name)
 
             os.makedirs(DEFAULT_SAVE_DIR, exist_ok=True)
-            upload_dir = os.path.join(DEFAULT_SAVE_DIR, "_uploads")
-            os.makedirs(upload_dir, exist_ok=True)
+            stored_path = os.path.join(DEFAULT_SAVE_DIR, stored_name)
 
             job_id = str(uuid.uuid4())
-            temp_path = os.path.join(upload_dir, f"{job_id}_{safe_name}")
-
-            with open(temp_path, "wb") as f:
-                f.write(file_data)
 
             with jobs_lock:
                 transfer_jobs[job_id] = {
                     "id": job_id,
                     "status": "queued",
-                    "protocol": "tcp",
-                    "host": host,
-                    "port": port,
-                    "filename": safe_name,
+                    "protocol": "http",
+                    "host": "central",
+                    "port": HTTP_PORT,
+                    "filename": display_name,
+                    "stored_name": stored_name,
                     "filesize": len(file_data),
                     "sent": 0,
                     "progress": 0,
@@ -667,10 +445,12 @@ class TransferAPIHandler(BaseHTTPRequestHandler):
                 }
 
             threading.Thread(
-                target=_send_file_tcp, args=(job_id, host, port, temp_path, safe_name), daemon=True
+                target=_store_upload,
+                args=(job_id, stored_path, file_data, display_name),
+                daemon=True,
             ).start()
 
-            return _json_response(self, {"job_id": job_id, "message": "Transfer started"})
+            return _json_response(self, {"job_id": job_id, "message": "Upload started"})
 
         return _error(self, "Not found", 404)
 
@@ -680,7 +460,7 @@ def run_http_server():
     os.makedirs(DEFAULT_SAVE_DIR, exist_ok=True)
     server = ThreadingHTTPServer((HTTP_HOST, HTTP_PORT), TransferAPIHandler)
     ui_status = "built" if STATIC_DIR.is_dir() else "not built (see GUI_README.md)"
-    print(f"[API] Transfer System running on http://127.0.0.1:{HTTP_PORT}")
+    print(f"[API] Central file server on http://127.0.0.1:{HTTP_PORT}")
     print(f"[API] UI status: {ui_status}")
     print(f"[API] Save directory: {DEFAULT_SAVE_DIR}")
     print("[API] No pip packages required — Python standard library only")

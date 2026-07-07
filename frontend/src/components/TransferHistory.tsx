@@ -19,8 +19,7 @@ function statusVariant(status: TransferJob["status"]) {
       return "success" as const;
     case "failed":
       return "destructive" as const;
-    case "transferring":
-    case "connecting":
+    case "uploading":
       return "warning" as const;
     default:
       return "secondary" as const;
@@ -73,7 +72,7 @@ export function TransferHistory({ transfers, stats, receivedCount }: TransferHis
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <StatCard label="Files sent (UI)" value={stats.total} icon={Send} />
+        <StatCard label="Uploads (UI)" value={stats.total} icon={Send} />
         <StatCard label="Completed" value={stats.completed} icon={CheckCircle2} tone="success" />
         <StatCard label="Failed" value={stats.failed} icon={XCircle} tone="danger" />
         <StatCard label="In progress" value={stats.active} icon={Clock} tone="warning" />
@@ -90,8 +89,8 @@ export function TransferHistory({ transfers, stats, receivedCount }: TransferHis
               <div>
                 <CardTitle>Transfer History</CardTitle>
                 <CardDescription>
-                  {stats.total} send{stats.total === 1 ? "" : "s"} via UI · {receivedCount} file
-                  {receivedCount === 1 ? "" : "s"} received on this PC
+                  {stats.total} upload{stats.total === 1 ? "" : "s"} via UI · {receivedCount} shared
+                  file{receivedCount === 1 ? "" : "s"} on server
                 </CardDescription>
               </div>
             </div>
@@ -113,13 +112,13 @@ export function TransferHistory({ transfers, stats, receivedCount }: TransferHis
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium">{job.filename}</p>
                         <p className="text-xs text-muted-foreground">
-                          {job.protocol.toUpperCase()} → {job.host}:{job.port}
+                          {job.host === "central" ? "Central server" : `${job.protocol.toUpperCase()} → ${job.host}:${job.port}`}
                         </p>
                       </div>
                     </div>
                     <Badge variant={statusVariant(job.status)}>{job.status}</Badge>
                   </div>
-                  {(job.status === "transferring" || job.status === "connecting") && (
+                  {job.status === "uploading" && (
                     <Progress value={job.progress} className="mt-2 h-1.5" />
                   )}
                   <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">

@@ -1,6 +1,6 @@
 // Main dashboard: polls API, shows receiver + sender panels
 import { useCallback, useEffect, useState } from "react";
-import { HardDrive, Monitor, Shield, Zap } from "lucide-react";
+import { HardDrive, Monitor } from "lucide-react";
 import { api, type ReceivedFile, type SystemStatus, type TransferJob } from "@/lib/api";
 import { ApiConnection } from "@/components/ApiConnection";
 import { FileUpload } from "@/components/FileUpload";
@@ -29,7 +29,7 @@ export default function App() {
 
   // --- Connection state ---
   const [apiOnline, setApiOnline] = useState(false);
-  const [backendReady, setBackendReady] = useState(() => !needsBackendSetup());
+  const [backendReady, setBackendReady] = useState(() => !needsBackendSetup()); // false on Vercel until ngrok URL set
   const [showConnectionPanel, setShowConnectionPanel] = useState(false);
   const hosted = isHostedUI(); // true on Vercel
 
@@ -98,14 +98,13 @@ export default function App() {
     setShowConnectionPanel(true);
   }, []);
 
-  // Auto-refresh: faster when TCP receiver is running
+  // Auto-refresh shared file list
   useEffect(() => {
     if (!backendReady) return;
     refreshAll();
-    const receiverActive = status?.server.running;
-    const interval = setInterval(refreshAll, receiverActive ? 1500 : 3000);
+    const interval = setInterval(refreshAll, 3000);
     return () => clearInterval(interval);
-  }, [refreshAll, status?.server.running, backendReady]);
+  }, [refreshAll, backendReady]);
 
   const showSetup = !backendReady || showConnectionPanel || (!apiOnline && !needsBackendSetup());
 
@@ -120,19 +119,16 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-lg font-bold tracking-tight">Transfer System</h1>
-              <p className="text-xs text-muted-foreground">TCP File Transfer</p>
+              <p className="text-xs text-muted-foreground">Centralized File Server</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             {hosted && backendReady && status?.detected_ip && (
               <Badge variant="outline" className="gap-1.5 font-mono">
                 <Monitor className="h-3 w-3" />
-                API PC: {status.detected_ip}
+                API Server: {status.detected_ip}
               </Badge>
             )}
-            <Badge variant={apiOnline ? "success" : "destructive"}>
-              API {apiOnline ? "Online" : "Offline"}
-            </Badge>
             {hosted && backendReady && (
               <Button
                 variant="ghost"
@@ -140,7 +136,7 @@ export default function App() {
                 className="text-xs"
                 onClick={() => setShowConnectionPanel(true)}
               >
-                Change PC
+                Change server
               </Button>
             )}
           </div>
@@ -148,21 +144,6 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
-        <div className="mb-8 flex flex-wrap gap-3">
-          <div className="flex items-center gap-2 rounded-full border bg-card px-4 py-1.5 text-sm shadow-sm">
-            <Zap className="h-3.5 w-3.5 text-amber-500" />
-            <span>Concurrent transfers</span>
-          </div>
-          <div className="flex items-center gap-2 rounded-full border bg-card px-4 py-1.5 text-sm shadow-sm">
-            <Shield className="h-3.5 w-3.5 text-primary" />
-            <span>Thread-safe sync</span>
-          </div>
-          <div className="flex items-center gap-2 rounded-full border bg-card px-4 py-1.5 text-sm shadow-sm">
-            <HardDrive className="h-3.5 w-3.5 text-emerald-600" />
-            <span>Chunked 4KB packets</span>
-          </div>
-        </div>
-
         {/* Link browser to this PC's api_server (required on Vercel) */}
         {(showSetup || needsBackendSetup()) && (
           <ApiConnection
@@ -183,7 +164,7 @@ export default function App() {
               <div className="grid gap-6 lg:grid-cols-2">
                 <div className="space-y-6">
                   {/* Left: TCP receiver (server IP + start/stop) + received files */}
-                  <ServerPanel status={status} apiOnline={apiOnline} onRefresh={refreshStatus} />
+                  <ServerPanel status={status} apiOnline={apiOnline} />
                   <ReceivedFiles
                     files={files}
                     directory={directory}
@@ -191,12 +172,7 @@ export default function App() {
                     loading={filesLoading}
                   />
                 </div>
-                {/* Right: send file (client receiver IP + upload) */}
-                <FileUpload
-                  serverRunning={status?.server.running}
-                  detectedIp={status?.detected_ip}
-                  onTransferComplete={refreshAll}
-                />
+                <FileUpload onTransferComplete={refreshAll} />
               </div>
             </TabsContent>
 

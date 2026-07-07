@@ -1,5 +1,5 @@
-// HTTP client for api_server.py — all paths append to getApiBase()
-import { getApiBase, usesDirectNgrok } from "./config";
+// HTTP client for api_server.py — all clients share one central server URL
+import { getApiBase } from "./config";
 
 export interface ServerInfo {
   running: boolean;
@@ -19,7 +19,6 @@ export interface SessionStats {
 export interface SystemStatus {
   local_ip: string;
   detected_ip: string;
-  detected_ips?: string[];
   server: ServerInfo;
   active_transfers: number;
   stats: SessionStats;
@@ -34,6 +33,7 @@ export interface TransferStats {
 
 export interface ReceivedFile {
   name: string;
+  display_name: string;
   size: number;
   size_formatted: string;
   modified: string;
@@ -41,11 +41,12 @@ export interface ReceivedFile {
 
 export interface TransferJob {
   id: string;
-  status: "queued" | "connecting" | "transferring" | "completed" | "failed";
+  status: "queued" | "uploading" | "completed" | "failed";
   protocol: string;
   host: string;
   port: number;
   filename: string;
+  stored_name?: string;
   filesize: number;
   sent: number;
   progress: number;
@@ -56,7 +57,8 @@ export interface TransferJob {
 
 function requestHeaders(extra?: HeadersInit): Headers {
   const headers = new Headers(extra);
-  if (usesDirectNgrok()) {
+  const base = getApiBase();
+  if (base.includes("ngrok")) {
     headers.set("ngrok-skip-browser-warning", "true");
   }
   return headers;
@@ -66,9 +68,7 @@ function requestHeaders(extra?: HeadersInit): Headers {
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const base = getApiBase();
   if (!base) {
-    throw new Error(
-      "Connect to the transfer server first — paste your ngrok URL or configure BACKEND_URL on Vercel."
-    );
+    throw new Error("Connect to the central transfer server URL first.");
   }
   const headers = requestHeaders(options?.headers);
   const res = await fetch(`${base}${path}`, { ...options, headers });
@@ -82,67 +82,20 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export const api = {
   getStatus: () => request<SystemStatus>("/status"),
 
-  startServer: () => {
-    const headers = requestHeaders({ "Content-Type": "application/json" });
-    return request<{
-      message: string;
-      running: boolean;
-      local_ip: string;
-      detected_ip?: string;
-      detected_ips?: string[];
-      address: string;
-      api_running: boolean;
-    }>("/server/start", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({}),
-    });
-  },
-
-  stopServer: () => {
-    const headers = requestHeaders({ "Content-Type": "application/json" });
-    return request<{ message: string; running: boolean }>("/server/stop", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({}),
-    });
-  },
-
   listFiles: () =>
     request<{ files: ReceivedFile[]; directory: string; count: number }>("/files"),
 
   downloadFile: (filename: string) =>
     `${getApiBase()}/files/download/${encodeURIComponent(filename)}`,
 
-  downloadFileBlob: async (filename: string) => {
-    const base = getApiBase();
-    if (!base) throw new Error("API not connected");
-    const headers = requestHeaders();
-    const res = await fetch(`${base}/files/download/${encodeURIComponent(filename)}`, {
-      headers,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new Error(err.detail || "Download failed");
-    }
-    return res.blob();
-  },
-
-  transferFile: (file: File, host: string, port: number) => {
+  uploadFile: (file: File) => {
     const form = new FormData();
     form.append("file", file);
-    form.append("host", host);
-    form.append("port", String(port));
     return request<{ job_id: string; message: string }>("/transfer", {
       method: "POST",
       body: form,
     });
   },
-
-  checkReceiver: (host: string, port: number) =>
-    request<{ reachable: boolean; host: string; port: number; message: string }>(
-      `/receiver/check?host=${encodeURIComponent(host)}&port=${encodeURIComponent(String(port))}`
-    ),
 
   getTransfer: (jobId: string) => request<TransferJob>(`/transfer/${jobId}`),
 

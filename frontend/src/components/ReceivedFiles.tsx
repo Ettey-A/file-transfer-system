@@ -1,6 +1,9 @@
 /** Lists files stored on the central server — visible to all connected clients. */
+import { useState } from "react";
 import { Download, FileText, FolderOpen, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
 import { api, type ReceivedFile } from "@/lib/api";
+import { usesDirectNgrok, usesHostedProxy } from "@/lib/config";
 import { formatDate } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,6 +17,32 @@ interface ReceivedFilesProps {
 }
 
 export function ReceivedFiles({ files, directory, onRefresh, loading }: ReceivedFilesProps) {
+  const [downloading, setDownloading] = useState<string | null>(null);
+
+  const handleDownload = async (file: ReceivedFile) => {
+    setDownloading(file.name);
+    try {
+      if (usesDirectNgrok() || usesHostedProxy()) {
+        const blob = await api.downloadFileBlob(file.name);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = file.display_name;
+        link.click();
+        URL.revokeObjectURL(url);
+      } else {
+        const link = document.createElement("a");
+        link.href = api.downloadFile(file.name);
+        link.download = file.display_name;
+        link.click();
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Download failed");
+    } finally {
+      setDownloading(null);
+    }
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -63,11 +92,13 @@ export function ReceivedFiles({ files, directory, onRefresh, loading }: Received
                 </div>
                 <div className="flex shrink-0 items-center gap-3">
                   <Badge variant="secondary">{file.size_formatted}</Badge>
-                  <Button variant="ghost" size="icon" asChild>
-                    {/* GET /api/files/download/{name} */}
-                    <a href={api.downloadFile(file.name)} download={file.display_name}>
-                      <Download className="h-4 w-4" />
-                    </a>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    disabled={downloading === file.name}
+                    onClick={() => handleDownload(file)}
+                  >
+                    <Download className="h-4 w-4" />
                   </Button>
                 </div>
               </div>

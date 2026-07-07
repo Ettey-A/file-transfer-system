@@ -1,5 +1,5 @@
 // HTTP client for api_server.py — all clients share one central server URL
-import { getApiBase } from "./config";
+import { getApiBase, usesDirectNgrok } from "./config";
 
 export interface ServerInfo {
   running: boolean;
@@ -57,8 +57,7 @@ export interface TransferJob {
 
 function requestHeaders(extra?: HeadersInit): Headers {
   const headers = new Headers(extra);
-  const base = getApiBase();
-  if (base.includes("ngrok")) {
+  if (usesDirectNgrok()) {
     headers.set("ngrok-skip-browser-warning", "true");
   }
   return headers;
@@ -70,6 +69,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   if (!base) {
     throw new Error("Connect to the central transfer server URL first.");
   }
+
   const headers = requestHeaders(options?.headers);
   const res = await fetch(`${base}${path}`, { ...options, headers });
   if (!res.ok) {
@@ -87,6 +87,20 @@ export const api = {
 
   downloadFile: (filename: string) =>
     `${getApiBase()}/files/download/${encodeURIComponent(filename)}`,
+
+  downloadFileBlob: async (filename: string) => {
+    const base = getApiBase();
+    if (!base) throw new Error("Connect to the central transfer server URL first.");
+    const headers = requestHeaders();
+    const res = await fetch(`${base}/files/download/${encodeURIComponent(filename)}`, {
+      headers,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Download failed");
+    }
+    return res.blob();
+  },
 
   uploadFile: (file: File) => {
     const form = new FormData();

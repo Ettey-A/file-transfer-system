@@ -11,6 +11,7 @@ import {
   needsBackendSetup,
   normalizeApiBase,
   setApiBase,
+  usesHostedProxy,
 } from "@/lib/config";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,6 +25,7 @@ interface ApiConnectionProps {
 
 export function ApiConnection({ onConnected, onDisconnected, forceSetup }: ApiConnectionProps) {
   const hosted = isHostedUI();
+  const proxyMode = usesHostedProxy();
   const setupRequired = forceSetup ?? needsBackendSetup();
   const [url, setUrl] = useState(() => getPersonalBackendUrl() ?? "");
   const [saving, setSaving] = useState(false);
@@ -55,8 +57,24 @@ export function ApiConnection({ onConnected, onDisconnected, forceSetup }: ApiCo
 
   const handleDisconnect = () => {
     clearApiBase();
-    toast.info("Disconnected from central server");
+    toast.info("Disconnected — using hosted proxy if configured");
     onDisconnected?.();
+  };
+
+  const handleUseProxy = async () => {
+    setSaving(true);
+    clearApiBase();
+    try {
+      await api.health();
+      toast.success("Connected via hosted API proxy");
+      onConnected();
+    } catch {
+      toast.error(
+        "Hosted proxy unavailable. Set BACKEND_URL on Vercel to your ngrok URL, or paste ngrok below."
+      );
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (hosted) {
@@ -81,8 +99,13 @@ export function ApiConnection({ onConnected, onDisconnected, forceSetup }: ApiCo
                   Expose port 8001:{" "}
                   <code className="rounded bg-muted px-1">ngrok http 8001</code>
                 </li>
-                <li>Every client pastes the same ngrok URL below</li>
+                <li>Every client pastes the same ngrok URL below (recommended for large files)</li>
               </ol>
+              {proxyMode && !setupRequired && (
+                <p className="mt-2 text-sm text-emerald-700 dark:text-emerald-400">
+                  Using hosted API proxy — uploads and downloads go through this site.
+                </p>
+              )}
             </div>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
               <div className="flex-1 space-y-1.5">
@@ -102,10 +125,16 @@ export function ApiConnection({ onConnected, onDisconnected, forceSetup }: ApiCo
                 {saving ? "Connecting..." : "Connect"}
               </Button>
             </div>
+            {setupRequired && (
+              <Button variant="outline" size="sm" onClick={handleUseProxy} disabled={saving} className="gap-1.5">
+                <Link2 className="h-3.5 w-3.5" />
+                Try hosted proxy
+              </Button>
+            )}
             {!setupRequired && getPersonalBackendUrl() && (
               <Button variant="outline" size="sm" onClick={handleDisconnect} className="gap-1.5">
                 <Unplug className="h-3.5 w-3.5" />
-                Disconnect
+                Switch to hosted proxy
               </Button>
             )}
           </div>

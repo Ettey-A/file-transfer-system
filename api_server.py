@@ -72,9 +72,19 @@ def _send_cors(handler: BaseHTTPRequestHandler):
 
 
 def _read_body(handler: BaseHTTPRequestHandler) -> bytes:
-    """Read raw POST body using Content-Length header."""
-    length = int(handler.headers.get("Content-Length", 0))
-    return handler.rfile.read(length) if length else b""
+    """Read raw POST body using Content-Length, with fallback for missing length."""
+    raw_length = handler.headers.get("Content-Length")
+    if raw_length is not None:
+        return handler.rfile.read(int(raw_length))
+
+    # Some proxies omit Content-Length; read until the handler closes the stream.
+    chunks: list[bytes] = []
+    while True:
+        chunk = handler.rfile.read(BUFFER_SIZE)
+        if not chunk:
+            break
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _read_json(handler: BaseHTTPRequestHandler) -> dict:

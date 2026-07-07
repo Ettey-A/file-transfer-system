@@ -10,7 +10,7 @@ import { TransferHistory } from "@/components/TransferHistory";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { isHostedUI, needsBackendSetup } from "@/lib/config";
+import { isHostedUI, needsBackendSetup, getPersonalBackendUrl } from "@/lib/config";
 
 export default function App() {
   // --- State from API ---
@@ -29,9 +29,9 @@ export default function App() {
 
   // --- Connection state ---
   const [apiOnline, setApiOnline] = useState(false);
-  const [backendReady, setBackendReady] = useState(() => !needsBackendSetup()); // false on Vercel until ngrok URL set
+  const [backendReady, setBackendReady] = useState(() => !needsBackendSetup());
   const [showConnectionPanel, setShowConnectionPanel] = useState(false);
-  const hosted = isHostedUI(); // true on Vercel
+  const hosted = isHostedUI();
 
   // Fetch server running state + detected IP
   const refreshStatus = useCallback(async () => {
@@ -84,6 +84,27 @@ export default function App() {
     refreshFiles();
     refreshTransfers();
   }, [refreshStatus, refreshFiles, refreshTransfers]);
+
+  // On hosted deploy with BACKEND_URL proxy, auto-connect without pasting ngrok
+  useEffect(() => {
+    if (!hosted || getPersonalBackendUrl()) return;
+    let cancelled = false;
+    api
+      .health()
+      .then(() => {
+        if (!cancelled) {
+          setBackendReady(true);
+          setApiOnline(true);
+          refreshAll();
+        }
+      })
+      .catch(() => {
+        /* user can connect manually */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hosted, refreshAll]);
 
   const handleConnected = useCallback(() => {
     setBackendReady(true);

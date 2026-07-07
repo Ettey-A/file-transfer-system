@@ -27,6 +27,17 @@ export function getPersonalBackendUrl(): string | null {
   return stored ? normalizeApiBase(stored) : null;
 }
 
+/** Hosted UI using same-origin /api proxy instead of a direct ngrok URL. */
+export function usesHostedProxy(): boolean {
+  return isHostedUI() && !getPersonalBackendUrl();
+}
+
+/** True when API calls go directly to ngrok (needs skip-browser-warning header). */
+export function usesDirectNgrok(): boolean {
+  const base = getApiBase();
+  return base.startsWith("http") && base.includes("ngrok");
+}
+
 /** On Vercel without proxy env and no saved URL, user must connect manually. */
 export function needsBackendSetup(): boolean {
   if (!isHostedUI()) return false;

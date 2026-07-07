@@ -72,12 +72,18 @@ export function FileUpload({ onTransferComplete }: FileUploadProps) {
 
     setUploading(true);
     try {
+      await api.health();
       const { job_id } = await api.uploadFile(file);
       toast.info(`Uploading ${file.name} to central server...`);
       pollJob(job_id);
     } catch (e) {
       setUploading(false);
-      toast.error(e instanceof Error ? e.message : "Failed to start upload");
+      const msg = e instanceof Error ? e.message : "Failed to start upload";
+      if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
+        toast.error("Cannot reach the server. Run python start.py on the host machine.");
+      } else {
+        toast.error(msg);
+      }
     }
   };
 
